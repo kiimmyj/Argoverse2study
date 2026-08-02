@@ -1,0 +1,7 @@
+data
+data/
+*.parquet
+*.csv
+*.pth
+__pycache__/
+wandb/
