@@ -5,3 +5,4 @@ data/
 *.pth
 __pycache__/
 wandb/
+*.png
