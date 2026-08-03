@@ -84,9 +84,10 @@ class Av2FocalDataset(Dataset):
         return {
             "x": torch.from_numpy(x),                       # (50, 5)
             "y": torch.from_numpy(y),                       # (60, 2)
+            # origin·theta: 정규화에 쓴 값을 버리지 않고 저장 → 나중에 예측을 city 좌표로 역변환할 때 사용
             "origin": torch.from_numpy(origin),             # (2,)  역변환용
             "theta": torch.tensor(theta, dtype=torch.float32),  # 역변환용
-            "scenario_id": s.scenario_id,
+            "scenario_id": s.scenario_id, 
         }
 
 
