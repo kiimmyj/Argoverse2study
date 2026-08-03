@@ -82,10 +82,11 @@ class Av2FocalDataset(Dataset):
         y = pos_n[OBS_LEN:]                       # (60, 2)
 
         return {
-            "x": torch.from_numpy(x),                       # (50, 5)
-            "y": torch.from_numpy(y),                       # (60, 2)
-            "origin": torch.from_numpy(origin),             # (2,)  역변환용
-            "theta": torch.tensor(theta, dtype=torch.float32),  # 역변환용
+            "x": torch.from_numpy(x),                       # (50, 5) 입력: 과거5초
+            "y": torch.from_numpy(y),                       # (60, 2) 정답: 미래6초
+            # origin·theta: 정규화에 쓴 값 → 예측을 city 좌표로 역변환할 때 사용
+            "origin": torch.from_numpy(origin),             # (2,)  t=49 city 좌표(원점)
+            "theta": torch.tensor(theta, dtype=torch.float32),  # t=49 heading(회전각)
             "scenario_id": s.scenario_id,
         }
 
