@@ -1,49 +1,50 @@
 """
-LSTMEncoderMLP - focal 궤적 예측 baseline (방향 B: 미래 60 step 한 번에 출력).
+LSTMMultimodal - focal 궤적 예측 (K=6 멀티모달, 방향 B 확장).
 
-Encoder: 입력 (B, 50, 5) 를 LSTM 으로 읽어 hidden state 로 압축
-Head    : hidden(128) → Linear → 미래 (B, 60, 2) 를 통째로 출력
-          (한 step 씩 이어붙이지 않음 → 오차 누적/발산 없음, teacher forcing 불필요)
+Encoder: 입력 (B, 50, 5) → LSTM → hidden 요약
+Head    : hidden → 궤적 6개 (B,6,60,2) + 각 궤적 확률 (B,6)
+          한 번에 출력(오차 누적 없음), teacher forcing 불필요.
 """
 import torch
 import torch.nn as nn
 
 OBS_LEN, PRED_LEN = 50, 60
-IN_DIM, OUT_DIM = 5, 2          # 입력 피처 5 / 출력 위치 2
+IN_DIM, OUT_DIM = 5, 2
+K = 6                       # 예측 모드 개수
 
 
 class LSTMSeq2Seq(nn.Module):
-    def __init__(self, in_dim=IN_DIM, out_dim=OUT_DIM,
-                 hidden=128, num_layers=2, pred_len=PRED_LEN):
+    def __init__(self, in_dim=IN_DIM, out_dim=OUT_DIM, hidden=128,
+                 num_layers=2, pred_len=PRED_LEN, k=K):
         super().__init__()
         self.pred_len = pred_len
         self.out_dim = out_dim
+        self.k = k
 
-        # Encoder: (B, 50, 5) -> hidden state
+        # Encoder: (B, 50, 5) -> hidden
         self.encoder = nn.LSTM(in_dim, hidden, num_layers, batch_first=True)
 
-        # Head: 마지막 hidden(128) -> 미래 60*2=120 을 한 번에
-        self.head = nn.Sequential(
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, pred_len * out_dim),
-        )
+        # 공통 backbone
+        self.backbone = nn.Sequential(nn.Linear(hidden, hidden), nn.ReLU())
+
+        # 궤적 헤드: 6개 궤적 * 60 * 2 = 720 을 한 번에
+        self.traj_head = nn.Linear(hidden, k * pred_len * out_dim)
+        # 확률 헤드: 6개 모드의 점수(logit)
+        self.prob_head = nn.Linear(hidden, k)
 
     def forward(self, x, y=None, teacher_forcing=True):
         """
-        x : (B, 50, 5)  입력
-        y, teacher_forcing : 이전 인터페이스 호환용(사용 안 함)
-        return: (B, 60, 2)  예측
+        x : (B, 50, 5)
+        return: traj (B, K, 60, 2),  logits (B, K)
         """
         B = x.size(0)
-
-        # 1) Encoder: 과거를 hidden state 로 압축
         _, (h, c) = self.encoder(x)          # h: (num_layers, B, hidden)
-        last_h = h[-1]                       # 마지막 층의 hidden: (B, hidden)
+        feat = self.backbone(h[-1])          # (B, hidden)
 
-        # 2) 미래 60 step 을 한 번에 출력 후 (B, 60, 2) 로 reshape
-        out = self.head(last_h)              # (B, 120)
-        return out.view(B, self.pred_len, self.out_dim)   # (B, 60, 2)
+        traj = self.traj_head(feat)          # (B, K*60*2)
+        traj = traj.view(B, self.k, self.pred_len, self.out_dim)  # (B,K,60,2)
+        logits = self.prob_head(feat)        # (B, K)  확률 점수(softmax 전)
+        return traj, logits
 
 
 if __name__ == "__main__":
@@ -59,14 +60,13 @@ if __name__ == "__main__":
     loader = DataLoader(ds, batch_size=16, shuffle=True)
 
     model = LSTMSeq2Seq().to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"model params : {n_params:,}")
+    print(f"model params : {sum(p.numel() for p in model.parameters()):,}")
 
     batch = next(iter(loader))
     x, y = batch["x"].to(device), batch["y"].to(device)
-    print(f"x (input)  : {tuple(x.shape)}   (16, 50, 5) 기대")
-    print(f"y (target) : {tuple(y.shape)}   (16, 60, 2) 기대")
-
-    pred = model(x)
-    print(f"pred       : {tuple(pred.shape)}   (16, 60, 2) 기대")
-    print("forward OK" if pred.shape == y.shape else "shape mismatch!")
+    traj, logits = model(x)
+    print(f"x     : {tuple(x.shape)}      (16, 50, 5) 기대")
+    print(f"traj  : {tuple(traj.shape)}   (16, 6, 60, 2) 기대")
+    print(f"logits: {tuple(logits.shape)}      (16, 6) 기대")
+    ok = traj.shape == (x.size(0), 6, 60, 2) and logits.shape == (x.size(0), 6)
+    print("forward OK" if ok else "shape mismatch!")
