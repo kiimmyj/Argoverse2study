@@ -10,6 +10,14 @@ Av2MapDataset 을 그대로 감싸고 x 채널만 motion_repr 로 갈아끼운�
   ah0_2  (50,2)  a누적(첫값=v0), h[rad]        ← ② 안
   vah4   (50,4)  v, a, sin h, cos h           ← ① + wrap 제거
   vh2    (50,2)  v, h                         ← 참고
+  aw0_2  (50,2)  페달(v0 포함), 핸들(h0 포함)      ← 핸들링 2채널
+  vad3   (50,3)  v, a, 조향각                   ← 핸들링 3채널
+  vaw3   (50,3)  v, a, 요레이트
+  vahd5  (50,5)  v, a, sin h, cos h, 조향각      ← 상태+조작 혼합
+  vahw5  (50,5)  v, a, sin h, cos h, 요레이트     ← 핸들링 추가형(ω)
+  vahdf5 (50,5)  v, a, sin h, cos h, 조향각       ← 핸들링 추가형(δ)
+  vawf3  (50,3)  v, a, 요레이트                   ← 핸들링 대체형(ω)
+  vadf3  (50,3)  v, a, 조향각                     ← 핸들링 대체형(δ)
 """
 from torch.utils.data import Dataset
 import numpy as np
@@ -25,7 +33,19 @@ REPRS = {
     "ah0_2": (mr.ReprConfig(mode="ah0",  heading="rad"),    dict(smooth=1, stop_ms=1.0)),
     "vah4":  (mr.ReprConfig(mode="vah",  heading="sincos"), dict(smooth=5, stop_ms=1.0)),
     "vh2":   (mr.ReprConfig(mode="vh",   heading="rad"),    dict(smooth=1, stop_ms=1.0)),
+    # --- 핸들링(조작) 관점: h(방향=상태) 대신 조향/요레이트(조작) ---
+    "aw0_2": (mr.ReprConfig(mode="aw0"),                    dict(smooth=1, stop_ms=1.0)),
+    "vad3":  (mr.ReprConfig(mode="vad"),                    dict(smooth=5, stop_ms=1.0)),
+    "vaw3":  (mr.ReprConfig(mode="vaw"),                    dict(smooth=5, stop_ms=1.0)),
+    "vahd5": (mr.ReprConfig(mode="vahd"),                   dict(smooth=5, stop_ms=1.0)),
+    # 실측 권장안: 상태(v, a, h) + AV2 heading 필드 기반 깨끗한 요레이트
+    "vahw5": (mr.ReprConfig(mode="vahw"),                   dict(smooth=5, stop_ms=1.0)),
+    "vahdf5":(mr.ReprConfig(mode="vahdf"),                  dict(smooth=5, stop_ms=1.0)),
+    "vawf3": (mr.ReprConfig(mode="vawf"),                   dict(smooth=5, stop_ms=1.0)),
+    "vadf3": (mr.ReprConfig(mode="vadf"),                   dict(smooth=5, stop_ms=1.0)),
 }
+# heading 필드가 필요한 모드 (조작 신호를 거기서 만든다)
+NEEDS_FIELD = {"vahw", "vahdf", "vawf", "vadf"}
 
 
 def in_dim(name: str) -> int:
@@ -52,6 +72,10 @@ class Av2MotionDataset(Dataset):
             return b
         cfg, kw = spec
         pos = b["x"][:, :2].numpy().astype(np.float64)     # 정규화 좌표 과거 50 step
+        if cfg.mode in NEEDS_FIELD:
+            # heading 필드(x 의 5번째 채널)로 깨끗한 요레이트를 만든다.
+            # 위치와 정합하지 않지만 입력 채널로는 정합성이 필요 없다.
+            kw = dict(kw, heading_field=b["x"][:, 4].numpy().astype(np.float64))
         m = mr.traj_to_motion(pos, **kw)
         b["x"] = torch.from_numpy(mr.encode(m, cfg))
         return b

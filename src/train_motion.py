@@ -72,9 +72,10 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False,
                             num_workers=args.workers, persistent_workers=True)
 
+    tag = f"{args.repr}_s{args.seed}"
     model = LSTMMapAttn(in_dim=in_dim(args.repr)).to(device)
     n_par = sum(p.numel() for p in model.parameters())
-    print(f"[{args.repr}] device {device} | in_dim {in_dim(args.repr)} | params {n_par:,} | "
+    print(f"[{tag}] device {device} | in_dim {in_dim(args.repr)} | params {n_par:,} | "
           f"train {len(train_ds)} val {len(val_ds)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -95,16 +96,16 @@ def main():
                      "sec": time.time() - t0})
         if ade < best[0]:
             best = (ade, fde)
-            torch.save(model.state_dict(), f"{args.outdir}/lstm_{args.repr}.pth")
-        print(f"[{args.repr}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | "
+            torch.save(model.state_dict(), f"{args.outdir}/lstm_{tag}.pth")
+        print(f"[{tag}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | "
               f"minADE6 {ade:.3f} | minFDE6 {fde:.3f} | {time.time()-t0:.0f}s", flush=True)
 
-    json.dump({"repr": args.repr, "in_dim": in_dim(args.repr), "params": n_par,
+    json.dump({"repr": args.repr, "tag": tag, "in_dim": in_dim(args.repr), "params": n_par,
                "args": vars(args), "history": hist,
                "best_minADE6": best[0], "best_minFDE6": best[1]},
-              open(f"{args.outdir}/{args.repr}.json", "w"), indent=2)
-    print(f"[{args.repr}] BEST minADE6 {best[0]:.3f} | minFDE6 {best[1]:.3f} "
-          f"-> {args.outdir}/{args.repr}.json", flush=True)
+              open(f"{args.outdir}/{tag}.json", "w"), indent=2)
+    print(f"[{tag}] BEST minADE6 {best[0]:.3f} | minFDE6 {best[1]:.3f} "
+          f"-> {args.outdir}/{tag}.json", flush=True)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,8 @@ DT = 0.1                # AV2 = 10 Hz
 MS_TO_KPH = 3.6
 KPH_TO_MS = 1.0 / 3.6
 STOP_MS = 0.1           # 이보다 느리면 이동방향이 노이즈 → 직전 방향 유지
+WHEELBASE = 2.8         # 승용차 축거 [m] (조향각 환산용)
+V_FLOOR = 1.0           # 곡률·조향각 계산 시 속력 하한 [m/s] (0으로 나누기 방지)
 
 
 # ---------------------------------------------------------------- 단위 / 각도
@@ -71,9 +73,12 @@ class Motion:
     a_ms2: np.ndarray       # 종방향 가속도 [m/s^2]   + 가속 / - 감속
     h_rad: np.ndarray       # 진행 방향 [rad]         (인코딩용)
     h_exact: np.ndarray     # 복원 전용 이동방향 [rad] (항상 위치차분 기반)
-    w_rads: np.ndarray      # 각속도(조향) [rad/s] = dh/dt
+    w_rads: np.ndarray      # 각속도(조향) [rad/s] = dh/dt  (이동방향 기반 — 저속에서 노이즈)
     p0: np.ndarray          # 시작 위치 (2,)
     stopped: np.ndarray     # 정지 여부 (bool, T)
+    # AV2 heading 필드 기반 각속도 [rad/s]. 실측상 유일하게 깨끗한 핸들링 신호
+    # (lag-1 자기상관 +0.965 vs 이동방향 기반 −0.141). 위치와 정합하지 않아 '입력 전용'.
+    w_field: Optional[np.ndarray] = None
 
     @property
     def v_kph(self):
@@ -92,6 +97,51 @@ class Motion:
     def w_degs(self):
         return np.degrees(self.w_rads)
 
+    # --- 핸들링(조작) 관점 파생량 ---------------------------------------
+    # h(방향)는 '상태'다. 운전자가 직접 만드는 것은 '얼마나 꺾는가'이고,
+    # 그것을 표현하는 방식이 아래 넷이다. a(페달)와 짝을 이루는 쪽은 이쪽이다.
+
+    @property
+    def kappa(self):
+        """곡률 [1/m] = ω/v. '1m 갈 때마다 몇 rad 꺾이는가' — 속도와 무관한 경로 굽힘.
+        정지에서 발산하므로 속력에 하한(V_FLOOR)을 둔다."""
+        return self.w_rads / np.maximum(self.v_ms, V_FLOOR)
+
+    @property
+    def delta_rad(self):
+        """조향각 [rad] = atan(L·κ). 자전거모델의 앞바퀴 각도 = 사실상 핸들 각도.
+        atan 이 씌워져 있어 곡률이 튀어도 ±90° 안에 갇힌다(자연 클리핑)."""
+        return np.arctan(WHEELBASE * self.kappa)
+
+    @property
+    def delta_deg(self):
+        return np.degrees(self.delta_rad)
+
+    @property
+    def kappa_field(self):
+        """heading 필드 기반 곡률 [1/m]. 노이즈가 20배 적은 ω_field 를 쓴다."""
+        if self.w_field is None:
+            return None
+        return self.w_field / np.maximum(self.v_ms, V_FLOOR)
+
+    @property
+    def delta_field_deg(self):
+        """heading 필드 기반 조향각 [deg]. δ 를 공정하게 평가하려면 이 쪽을 써야 한다."""
+        k = self.kappa_field
+        return None if k is None else np.degrees(np.arctan(WHEELBASE * k))
+
+    @property
+    def a_lat(self):
+        """횡가속도 [m/s²] = v·ω. 코너에서 몸이 쏠리는 그 힘.
+        마찰 한계(약 8 m/s²)를 넘으면 물리적으로 불가능 → 노이즈 판별에 쓸 수 있다."""
+        return self.v_ms * self.w_rads
+
+    @property
+    def dw_degs(self):
+        """h[-1]=0 으로 두고 만든 방향 증분 [deg/s]. 누적하면 h 가 그대로 나온다.
+        → 첫 값이 초기 방향 h0 를 싣는다 (dv_kph 와 같은 트릭의 횡방향 버전)."""
+        return np.degrees(np.diff(self.h_rad, prepend=0.0)) / 0.1
+
     @property
     def dv_kph(self):
         """v[-1]=0 으로 두고 만든 속도 증분 [km/h]. 누적합하면 v 가 그대로 나온다.
@@ -100,15 +150,17 @@ class Motion:
 
 
 def traj_to_motion(pos, dt=DT, stop_ms=STOP_MS, heading_field=None,
-                   smooth=1, a_clip=None) -> Motion:
+                   smooth=1, a_clip=None, use_field_heading=False) -> Motion:
     """
     (T,2) 위치 → Motion.
 
     smooth        : a 를 만들기 전에 속력에 걸 이동평균 창 (홀수). 1=끔.
                     a 는 위치의 2계 미분이라 노이즈가 크다 → 여기서만 완화한다.
                     v 자체는 스무딩하지 않으므로 복원은 계속 무손실이다.
-    heading_field : AV2 heading 필드 (T,). 주면 인코딩용 h 로 이걸 쓴다(부드러움).
-                    복원용 h_exact 는 언제나 위치차분 기반이라 영향 없음.
+    heading_field : AV2 heading 필드 (T,). 주면 이걸로 w_field(깨끗한 각속도)를 만든다.
+                    h_rad 는 그대로 이동방향을 쓴다 — heading 필드는 위치와 정합하지
+                    않아서(슬립각) 복원에 쓰면 ADE 0.5 m 를 잃기 때문이다.
+    use_field_heading : True 면 h_rad 까지 heading 필드로 덮어쓴다(진단용).
     a_clip        : |a| 상한 [m/s^2]. 노이즈 꼬리를 자를 때.
     """
     pos = np.asarray(pos, dtype=np.float64)
@@ -138,14 +190,17 @@ def traj_to_motion(pos, dt=DT, stop_ms=STOP_MS, heading_field=None,
     a = np.append(a, a[-1])[:len(v)]
     stopped = np.append(stopped, stopped[-1])
 
+    w_field = None
     if heading_field is not None:
-        hf = np.asarray(heading_field, dtype=np.float64)
-        h_enc = wrap_pi(hf[:len(v)])
+        hf = wrap_pi(np.asarray(heading_field, dtype=np.float64)[:len(v)])
+        w_field = np.append(wrap_pi(np.diff(hf)) / dt, 0.0)[:len(v)]
+        if use_field_heading:
+            h_enc = hf
 
     w = np.append(wrap_pi(np.diff(h_enc)) / dt, 0.0)[:len(v)]   # 각속도(조향) [rad/s]
 
     return Motion(v_ms=v, a_ms2=a, h_rad=h_enc, h_exact=h_exact, w_rads=w,
-                  p0=pos[0].copy(), stopped=stopped)
+                  w_field=w_field, p0=pos[0].copy(), stopped=stopped)
 
 
 # ---------------------------------------------------------------- 물리량 -> 궤적
@@ -183,6 +238,16 @@ DEFAULT_SCALES = {
     "w_rads": 0.4,      # 각속도 (≈23 deg/s)
     "dv_kph": 3.0,      # 속도 증분 (첫 값만 v0 라 아웃라이어)
     "vxy_kph": 20.0,    # 속도 벡터 성분
+    # --- 핸들링 관점 (val 500 실측 반영) ---
+    # 실측 결론: 입력으로 쓸 만한 것은 heading 필드 기반 ω 하나뿐이다.
+    # κ·δ 는 v 로 나눠서 저속에서 발산하고(|κ|max 746 1/m = 반경 1.3mm),
+    # a_lat 는 v 를 곱해 저속 정보를 버린다. 아래 상수는 진단용으로만 남긴다.
+    "w_field": 0.1,     # heading 필드 각속도 [rad/s] (실측 std 0.094) ← 권장
+    "w_degs": 5.4,      # 이동방향 각속도 [deg/s] — 노이즈가 커서 비권장
+    "kappa": 0.1,       # 곡률 [1/m], ±0.2 클립 전제
+    "delta_deg": 17.2,  # 조향각 [deg] (=0.3 rad), ±40° 클립 전제
+    "a_lat": 3.0,       # 횡가속도 [m/s²], ±8 클립 전제
+    "dw_degs": 30.0,    # 방향 증분 (첫 값만 h0 라 아웃라이어)
 }
 # sin/cos 는 이미 [-1,1] 이라 나누지 않는다 (std 0.22 / 0.41 — 대부분 직진이라 cos≈1).
 
@@ -197,12 +262,32 @@ class ReprConfig:
     scales: dict = field(default_factory=lambda: dict(DEFAULT_SCALES))
 
     def channels(self):
-        if self.mode in ("vw", "vxvy"):
+        if self.mode in ("vw", "vxvy", "aw0"):
             return 2
+        if self.mode in ("vaw", "vad", "vawf", "vadf"):
+            return 3
+        if self.mode in ("vahd", "vahw", "vahdf"):
+            return 5
         n_h = 2 if self.heading == "sincos" else 1
         return {"vh": 1, "ah": 1, "ah0": 1, "vah": 2}[self.mode] + n_h
 
     def names(self):
+        if self.mode == "aw0":
+            return ["dv[km/h] (페달, 첫값=v0)", "dw[deg/s] (핸들, 첫값=h0)"]
+        if self.mode == "vaw":
+            return ["v[km/h]", "a[km/h/s]", "w[deg/s] 요레이트"]
+        if self.mode == "vad":
+            return ["v[km/h]", "a[km/h/s]", "delta[deg] 조향각"]
+        if self.mode == "vahd":
+            return ["v[km/h]", "a[km/h/s]", "sin h", "cos h", "delta[deg] 조향각"]
+        if self.mode == "vahw":
+            return ["v[km/h]", "a[km/h/s]", "sin h", "cos h", "w_field[rad/s] 요레이트"]
+        if self.mode == "vahdf":
+            return ["v[km/h]", "a[km/h/s]", "sin h", "cos h", "delta_field[deg] 조향각"]
+        if self.mode == "vawf":
+            return ["v[km/h]", "a[km/h/s]", "w_field[rad/s] 요레이트"]
+        if self.mode == "vadf":
+            return ["v[km/h]", "a[km/h/s]", "delta_field[deg] 조향각"]
         if self.mode == "vw":
             return [f"v[{'km/h' if self.unit == 'kph' else 'm/s'}]", "w[rad/s]"]
         if self.mode == "vxvy":
@@ -234,6 +319,42 @@ def encode(motion: Motion, cfg: ReprConfig = None) -> np.ndarray:
         vy = motion.v_kph * np.sin(motion.h_rad)
         sc = cfg.scales["vxy_kph"] if cfg.scale else 1.0
         return np.stack([vx / sc, vy / sc], axis=1).astype(np.float32)
+
+    # --- 핸들링(조작) 관점 모드 ---
+    if cfg.mode == "aw0":       # (페달, 핸들) 2채널 — 둘 다 누적 방식이라 무손실
+        sc = cfg.scale
+        c0 = motion.dv_kph / (cfg.scales["dv_kph"] if sc else 1.0)
+        c1 = motion.dw_degs / (cfg.scales["dw_degs"] if sc else 1.0)
+        return np.stack([c0, c1], axis=1).astype(np.float32)
+    if cfg.mode in ("vahw", "vahdf", "vawf", "vadf"):
+        # 핸들링 계열 — 조작 신호는 반드시 AV2 heading 필드에서 만든다.
+        # 위치차분 기반은 std 81 deg/s 로 노이즈, 필드 기반은 5.4 deg/s (실측).
+        sc = cfg.scale
+        if motion.w_field is None:
+            raise ValueError(f"mode='{cfg.mode}' 는 traj_to_motion(heading_field=...) 이 필요하다")
+        if cfg.mode in ("vahw", "vawf"):
+            hand = np.clip(motion.w_field, -1.0, 1.0)          # 물리 상한, 실측 0.004% 영향
+            hand = hand / (cfg.scales["w_field"] if sc else 1.0)
+        else:
+            hand = np.clip(motion.delta_field_deg, -40.0, 40.0)  # 실측 1.6% 영향
+            hand = hand / (cfg.scales["delta_deg"] if sc else 1.0)
+        cols = [motion.v_kph / (cfg.scales["v_kph"] if sc else 1.0),
+                motion.a_kphs / (cfg.scales["a_kphs"] if sc else 1.0)]
+        if cfg.mode in ("vahw", "vahdf"):                      # 추가형: heading 도 같이
+            cols += [np.sin(motion.h_rad), np.cos(motion.h_rad)]
+        cols.append(hand)
+        return np.stack(cols, axis=1).astype(np.float32)
+    if cfg.mode in ("vaw", "vad", "vahd"):
+        sc = cfg.scale
+        cols = [motion.v_kph / (cfg.scales["v_kph"] if sc else 1.0),
+                motion.a_kphs / (cfg.scales["a_kphs"] if sc else 1.0)]
+        if cfg.mode == "vahd":
+            cols += [np.sin(motion.h_rad), np.cos(motion.h_rad)]
+        if cfg.mode == "vaw":
+            cols.append(motion.w_degs / (cfg.scales["w_degs"] if sc else 1.0))
+        else:
+            cols.append(motion.delta_deg / (cfg.scales["delta_deg"] if sc else 1.0))
+        return np.stack(cols, axis=1).astype(np.float32)
 
     cols = []
     if cfg.mode == "ah0":           # 속도 증분: 누적합하면 v (첫 값이 v0)
@@ -281,6 +402,33 @@ def decode(feat, cfg: ReprConfig = None, p0=None, v0_ms=None, dt=DT, h_anchor=No
         sc = cfg.scales["vxy_kph"] if cfg.scale else 1.0
         vxy = to_ms(feat[:, :2] * sc)
         return np.vstack([p0z, p0z + np.cumsum(vxy[:-1] * dt, axis=0)])
+
+    # --- 핸들링 관점 모드 ---
+    if cfg.mode == "aw0":
+        sc = cfg.scale
+        dv = feat[:, 0] * (cfg.scales["dv_kph"] if sc else 1.0)
+        dw = feat[:, 1] * (cfg.scales["dw_degs"] if sc else 1.0)
+        v = to_ms(np.cumsum(dv))                     # 누적합 = 속력
+        h = np.radians(np.cumsum(dw) * dt)           # 누적합 = 방향 (첫 값이 h0)
+        return vh_to_traj(p0z, v, h, dt)
+    if cfg.mode in ("vaw", "vad", "vahd", "vahw", "vahdf", "vawf", "vadf"):
+        sc = cfg.scale
+        v = to_ms(feat[:, 0] * (cfg.scales["v_kph"] if sc else 1.0))
+        if cfg.mode in ("vahd", "vahw", "vahdf"):   # heading 이 직접 있으면 무손실                       # heading 이 직접 있으면 무손실
+            h = np.arctan2(feat[:, 2], feat[:, 3])
+            return vh_to_traj(p0z, v, h, dt)
+        if cfg.mode == "vaw":
+            w = np.radians(feat[:, 2] * (cfg.scales["w_degs"] if sc else 1.0))
+        else:                                        # 조향각 → 요레이트: w = v·tan(δ)/L
+            d = np.radians(feat[:, 2] * (cfg.scales["delta_deg"] if sc else 1.0))
+            w = np.maximum(v, V_FLOOR) * np.tan(d) / WHEELBASE
+        idx, val = (len(v) - 1, 0.0) if h_anchor is None else h_anchor
+        h = np.empty(len(v)); h[idx] = val
+        for t in range(idx, len(v) - 1):
+            h[t + 1] = h[t] + w[t] * dt
+        for t in range(idx, 0, -1):
+            h[t - 1] = h[t] - w[t - 1] * dt
+        return vh_to_traj(p0z, v, h, dt)
 
     i, v, a = 0, None, None
     if cfg.mode == "ah0":
