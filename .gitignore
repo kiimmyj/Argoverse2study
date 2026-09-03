@@ -8,3 +8,4 @@ wandb/
 *.png
 animation/output/
 runs/*.log
+runs/*.npz

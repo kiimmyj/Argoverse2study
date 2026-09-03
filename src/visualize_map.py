@@ -114,10 +114,17 @@ def draw_single(r, label, out):
 
 
 def collect(args, device):
-    ds = Av2MapDataset(DATA_ROOT, args.split, limit=args.pool)
+    use_lane = args.lane > 0
+    if use_lane:
+        from dataset_lane import Av2LaneRuleDataset
+        from model_lane import LSTMMapRule
+        ds = Av2LaneRuleDataset(DATA_ROOT, args.split, limit=args.pool,
+                                with_rules=(args.lane == 30))
+        model = LSTMMapRule(lane_in=args.lane).to(device)
+    else:
+        ds = Av2MapDataset(DATA_ROOT, args.split, limit=args.pool)
+        model = LSTMSeq2Seq().to(device)
     loader = DataLoader(ds, batch_size=1, shuffle=False)
-
-    model = LSTMSeq2Seq().to(device)
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
     model.eval()
 
@@ -127,14 +134,19 @@ def collect(args, device):
             x = b["x"].to(device)
             lanes_t = b["lanes"].to(device); mask = b["lane_mask"].to(device)
             y = b["y"][0].numpy()
-            traj, logits = model(x, lanes_t, mask)
+            if use_lane:
+                lf = b["lane_feat"].to(device) if args.lane == 30 else None
+                traj, logits = model(x, lanes_t, mask, lf)
+            else:
+                traj, logits = model(x, lanes_t, mask)
             traj = traj[0].cpu().numpy()
             probs = F.softmax(logits[0], dim=0).cpu().numpy()
             origin = b["origin"][0].numpy(); theta = float(b["theta"][0])
 
             fde_k = np.linalg.norm(traj[:, -1] - y[-1], axis=1)
             ade_k = np.linalg.norm(traj - y[None], axis=2).mean(axis=1)
-            best = int(fde_k.argmin())
+            best = int(fde_k.argmin())        # 그림에서 강조할 모드
+            # 지표는 AV2 규약대로 각각 독립적으로 최소 (학습 evaluate() 와 동일)
 
             sdir = ds.dirs[idx]; sid = sdir.name
             # 그림은 정규화 좌표 그대로 (focal 중앙 / 진행방향 +x)
@@ -142,7 +154,7 @@ def collect(args, device):
 
             records.append({
                 "sid": sid,
-                "min_ade": float(ade_k[best]), "min_fde": float(fde_k[best]),
+                "min_ade": float(ade_k.min()), "min_fde": float(fde_k.min()),
                 "hist": x[0, :, :2].cpu().numpy(),
                 "gt": y,
                 "trajs": [traj[k] for k in range(6)],
@@ -156,6 +168,11 @@ def main():
     ap.add_argument("--split", default="val", choices=["train", "val", "test"])
     ap.add_argument("--pool", type=int, default=300, help="평가/후보 시나리오 수")
     ap.add_argument("--ckpt", default=CKPT)
+    ap.add_argument("--lane", type=int, default=-1,
+                    help="차로규칙 모델: lane_encoder 입력(20=규칙없음, 30=규칙포함). -1이면 dataset_map")
+    ap.add_argument("--title", default="v3 on HD map")
+    ap.add_argument("--prefix", default="prediction_map",
+                    help="출력 파일 이름 앞부분")
     ap.add_argument("--single", type=int, default=None,
                     help="FDE 오름차순 등수 하나만 크게 저장 (0=가장 정확)")
     args = ap.parse_args()
@@ -168,13 +185,13 @@ def main():
     if args.single is not None:
         i = max(0, min(n - 1, args.single))
         draw_single(records[i], f"{records[i]['sid'][:8]} (rank {i+1}/{n})",
-                    "prediction_map_single.png")
+                    f"{args.prefix}_single.png")
     else:
         draw_grid(records, list(range(n - 9, n)), ["hard"] * 9,
-                  "v3 on HD map - HARD cases (high FDE)", "prediction_map_hard.png")
+                  f"{args.title} - HARD cases (high FDE)", f"{args.prefix}_hard.png")
         mid = n // 2
         draw_grid(records, list(range(mid - 4, mid + 5)), ["avg"] * 9,
-                  "v3 on HD map - AVERAGE cases", "prediction_map_avg.png")
+                  f"{args.title} - AVERAGE cases", f"{args.prefix}_avg.png")
 
     print(f"pool={n}  minADE6={np.mean([r['min_ade'] for r in records]):.2f}m  "
           f"minFDE6={np.mean([r['min_fde'] for r in records]):.2f}m")
