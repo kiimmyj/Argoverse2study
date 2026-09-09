@@ -48,6 +48,11 @@ def evaluate(model, loader, device, use_rules):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rules", type=int, default=1)
+    ap.add_argument("--theta", type=int, default=0,
+                    help="1 이면 입력에 (sin theta, cos theta, valid) 3채널을 덧붙인다")
+    ap.add_argument("--h-src", dest="h_src", default="av2", choices=["av2", "build"],
+                    help="theta 를 만들 h 의 출처. build = 위치차분 + 저속 AV2 보조")
+    ap.add_argument("--tag", default="")
     ap.add_argument("--limit", type=int, default=50000)
     ap.add_argument("--val-limit", type=int, default=2000)
     ap.add_argument("--epochs", type=int, default=15)
@@ -59,14 +64,16 @@ def main():
     args = ap.parse_args()
 
     use_rules = bool(args.rules)
-    tag = f"lane_{'rules' if use_rules else 'norule'}_s{args.seed}"
+    tag = args.tag or (f"lane_{'rules' if use_rules else 'norule'}"
+                       + (f"_th{args.h_src}" if args.theta else "") + f"_s{args.seed}")
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.outdir, exist_ok=True)
 
     lim = None if args.limit == 0 else args.limit
-    tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, with_rules=use_rules)
-    va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, with_rules=use_rules)
+    dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src)
+    tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
+    va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
     g = torch.Generator(); g.manual_seed(args.seed)
     tl = DataLoader(tr, batch_size=args.batch, shuffle=True, generator=g,
                     num_workers=args.workers, drop_last=True, persistent_workers=True)
@@ -74,9 +81,10 @@ def main():
                     num_workers=args.workers, persistent_workers=True)
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    model = LSTMMapRule(lane_in=lane_in).to(device)
+    in_dim = 5 + (3 if args.theta else 0)          # 기존 5채널은 그대로 두고 덧붙인다
+    model = LSTMMapRule(in_dim=in_dim, lane_in=lane_in).to(device)
     npar = sum(p.numel() for p in model.parameters())
-    print(f"[{tag}] device {device} | lane_in {lane_in} | params {npar:,} | "
+    print(f"[{tag}] device {device} | in_dim {in_dim} | lane_in {lane_in} | params {npar:,} | "
           f"train {len(tr)} val {len(va)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -101,7 +109,8 @@ def main():
         print(f"[{tag}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | "
               f"minADE6 {ade:.3f} | minFDE6 {fde:.3f} | {time.time()-t0:.0f}s", flush=True)
 
-    json.dump({"tag": tag, "rules": use_rules, "lane_in": lane_in, "params": npar,
+    json.dump({"tag": tag, "rules": use_rules, "lane_in": lane_in,
+               "in_dim": in_dim, "params": npar,
                "args": vars(args), "history": hist,
                "best_minADE6": best[0], "best_minFDE6": best[1]},
               open(f"{args.outdir}/{tag}.json", "w"), indent=2)

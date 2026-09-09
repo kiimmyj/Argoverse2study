@@ -36,6 +36,8 @@ def main():
     ap.add_argument("--half-w", dest="half_w", type=float, default=lf.LANE_HALF_W,
                     help="횡오프셋 상한 [m]. 차로 반폭")
     ap.add_argument("--out", default="runs/v4sim.npz")
+    ap.add_argument("--legacy", type=int, default=0,
+                    help="1 이면 경로 열거를 수정 전 동작으로 (A/B 기준선)")
     args = ap.parse_args()
 
     d = np.load(args.traj, allow_pickle=True)
@@ -46,6 +48,7 @@ def main():
     off_b = np.zeros((N, 6), bool); off_a = np.zeros((N, 6), bool)
     wr_b = np.zeros((N, 6), bool);  wr_a = np.zeros((N, 6), bool)
 
+    rstats, kink_p99 = {}, []
     for i in range(N):
         sid = str(d["scenario_id"][i])
         raw = json.load(open(MAP / sid / f"log_map_archive_{sid}.json"))
@@ -61,8 +64,10 @@ def main():
         h0 = np.array([np.cos(float(d["theta"][i])), np.sin(float(d["theta"][i]))])
         starts = g.candidate_lanes(d["origin"][i].astype(np.float64), h0, path=hist)
         reach = g.reachable(starts, max(20.0, v_now * 6.0) + REACH_MARGIN_M) if starts else set()
-        routes = lf.build_routes(g, starts, reach)
+        routes = (lf.build_routes(g, starts, reach, legacy=True) if args.legacy
+                  else lf.build_routes(g, starts, reach, v0=v_now, stats=rstats))
         nroute[i] = len(routes)
+        kink_p99 += [lf.route_kink_deg(r["tan"]) for r in routes]
 
         def viol(p):
             """도로이탈 / 역주행 판정.
@@ -103,15 +108,25 @@ def main():
     ade_b = np.linalg.norm(pred - gt[:, None], axis=3).mean(2)
     ade_a = np.linalg.norm(proj - gt[:, None], axis=3).mean(2)
     m = ok
-    print(f"\n=== ④ 출력 공간 시뮬레이션 ({N} 시나리오) ===")
+    print(f"\n=== ④ 출력 공간 시뮬레이션 ({N} 시나리오, 경로열거={'수정 전' if args.legacy else 'succ-only'}) ===")
     print(f"  경로를 못 만든 시나리오 {int((~ok).all(1).sum())}개 "
           f"(차로 후보 0개) — ④가 예측 자체를 못 하는 경우")
     print(f"  시나리오당 경로 후보 평균 {nroute.mean():.1f}개\n")
     print(f"  {'지표':<26}{'투영 전':>10}{'투영 후':>10}")
     print(f"  {'도로이탈 (모드)':<26}{off_b[m].mean()*100:>9.2f}%{off_a[m].mean()*100:>9.2f}%")
     print(f"  {'역주행 (모드)':<26}{wr_b[m].mean()*100:>9.2f}%{wr_a[m].mean()*100:>9.2f}%")
-    print(f"  {'minADE6':<26}{ade_b.min(1).mean():>10.3f}{np.nanmin(np.where(m, ade_a, np.nan), 1).mean():>10.3f}")
+    any_ok = m.any(1)          # 모드가 하나도 안 남은 시나리오는 minADE6 에서 뺀다 (nan 방지)
+    ade_a_min = np.nanmin(np.where(m[any_ok], ade_a[any_ok], np.nan), 1)
+    print(f"  {'minADE6':<26}{ade_b.min(1).mean():>10.3f}{ade_a_min.mean():>10.3f}"
+          f"   (유효 {int(any_ok.sum())}/{N})")
     print(f"  {'모드 평균 ADE':<26}{ade_b[m].mean():>10.3f}{ade_a[m].mean():>10.3f}")
+    # 경로 열거기 건전성. 빈 리스트에서 죽지 않게 감싼다(경로 0개 시나리오가 있을 수 있다).
+    if kink_p99:
+        k = np.asarray(kink_p99)
+        print(f"\n  경로 접선 꺾임: 중앙 {np.median(k):.1f}°  p99 {np.percentile(k,99):.1f}°  "
+              f"max {k.max():.1f}°  (>90° {int((k>90).sum())}개 / {len(k)}개)")
+    print(f"  게이트: 이음매 폐기 {rstats.get('n_seam_drop',0)}  꺾임 폐기 {rstats.get('n_kink_drop',0)}  "
+          f"고리 절단 {rstats.get('n_loop_cut',0)}")
     print(f"\n  저장 -> {args.out}")
 
 
