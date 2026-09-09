@@ -39,6 +39,18 @@ import json
 PRED_SEC = PRED_LEN / 10.0        # 예측 구간 6초
 N_MODES = 6                       # L3: 후보 경로 = 예측 모드의 개수 (기존 K=6 과 맞춤)
 N_RPTS = 64                       # 경로 하나를 호길이 등간격 몇 점으로 표현할지
+# 두 후보 경로를 '같다'고 볼 거리 [m]. 지평에서 이보다 가까우면 같은 분기다.
+# 실측: 중복 제거 없이 상위 6개를 쓰면 시나리오의 28.2% 에서 6개가 지평에서 1 m 이내로
+# 붙어 있어 모드 6개가 사실상 1개가 된다 (minADE6 이 minADE1 로 퇴화).
+DEDUP_M = 2.5
+
+
+def _at(route, s_query):
+    """경로 위 호길이 s 지점의 좌표 (경로보다 멀면 끝점)."""
+    S = route["s"]
+    t = float(np.clip(s_query, 0.0, S[-1]))
+    return np.array([np.interp(t, S, route["pts"][:, 0]),
+                     np.interp(t, S, route["pts"][:, 1])])
 
 
 class Av2LaneRuleDataset(Dataset):
@@ -190,14 +202,32 @@ class Av2LaneRuleDataset(Dataset):
         rts = lf.build_routes(g, starts, reach, v0=speed) if starts else []
         if rts:
             order = np.argsort([lf.to_frame(path_city, r)[2] for r in rts])
-            rts = [rts[i] for i in order[:K]]
+            rts = [rts[i] for i in order]
+            # 지평에서 갈라지지 않는 경로는 같은 분기다 — 버리고 모드를 아낀다.
+            hz = max(10.0, speed * PRED_SEC)
+            keep = []
+            for r in rts:
+                q = np.array([_at(r, hz * f) for f in (0.5, 1.0)])
+                if all(np.linalg.norm(q - np.array([_at(o, hz * f) for f in (0.5, 1.0)]),
+                                      axis=1).max() > DEDUP_M for o in keep):
+                    keep.append(r)
+                if len(keep) >= K:
+                    break
+            rts = keep
 
         P = np.zeros((K, M, 2), np.float32); T = np.zeros((K, M, 2), np.float32)
         B = np.zeros((K, M, 2), np.float32); L = np.zeros(K, np.float32)
         SD = np.zeros((K, 2), np.float32)          # 현재 위치의 (s0, d0)
         mask = np.zeros(K, np.float32)
+        sub = np.zeros(K, np.int64)                # 같은 경로 위의 몇 번째 종방향 하위모드인가
         now = path_city[-1:]                        # 예측 시작점 (city 좌표)
+        # 구별되는 경로가 R개면 K개 슬롯을 R개로 채우고 나머지는 되풀이한다.
+        # 되풀이된 슬롯은 sub 인덱스가 달라서 모델이 **종방향(속도) 다중성**으로 쓴다 —
+        # 직선 도로에서 지도는 갈림길을 주지 않지만 '얼마나 빨리 가는가'는 여전히 갈린다.
+        n_dist = len(rts)                       # 구별되는 분기의 수 (R 은 회전행렬이다)
+        rts = [rts[i % n_dist] for i in range(K)] if n_dist else []
         for i, r in enumerate(rts):
+            sub[i] = i // max(n_dist, 1)
             q = lf.resample_route(r, M)
             ll, lr = lf.rule_band(g, r)
             j = np.clip((q["s"] / max(q["len"], 1e-6) * (len(r["s"]) - 1)).astype(int),
@@ -217,6 +247,8 @@ class Av2LaneRuleDataset(Dataset):
         return {"routes": torch.from_numpy(P), "route_tan": torch.from_numpy(T),
                 "route_band": torch.from_numpy(B), "route_len": torch.from_numpy(L),
                 "route_sd0": torch.from_numpy(SD), "route_mask": torch.from_numpy(mask),
+                "route_sub": torch.from_numpy(sub),
+                "n_distinct": torch.tensor(float(n_dist)),
                 "v0": torch.tensor(speed, dtype=torch.float32),
                 "route_fallback": torch.tensor(0.0 if rts else 1.0)}
 
