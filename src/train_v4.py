@@ -107,6 +107,9 @@ def main():
     ap.add_argument("--rules", type=int, default=1)
     ap.add_argument("--theta", type=int, default=1)
     ap.add_argument("--h-src", dest="h_src", default="build", choices=["av2", "build"])
+    ap.add_argument("--fallback", default="fan", choices=["straight1", "straight6", "fan"],
+                    help="지도가 경로를 못 주는 시나리오를 무엇으로 채울지. "
+                         "straight1=직진1개(mask 1) / straight6=직진6복제(모드예산만) / fan=부채꼴6개")
     ap.add_argument("--limit", type=int, default=50000)
     ap.add_argument("--val-limit", type=int, default=2000)
     ap.add_argument("--epochs", type=int, default=15)
@@ -127,7 +130,7 @@ def main():
 
     lim = None if args.limit == 0 else args.limit
     dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src,
-               routes=args.level != "l2")
+               routes=args.level != "l2", fallback=args.fallback)
     tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
     va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
     g = torch.Generator(); g.manual_seed(args.seed)
@@ -140,7 +143,8 @@ def main():
     in_dim = 5 + (3 if args.theta else 0)
     model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level).to(device)
     npar = sum(p.numel() for p in model.parameters())
-    print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | in_dim {in_dim} "
+    print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "
+          f"fallback {args.fallback} | in_dim {in_dim} "
           f"| params {npar:,} | train {len(tr)} val {len(va)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)

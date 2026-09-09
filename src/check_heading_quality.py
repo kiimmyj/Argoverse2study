@@ -7,7 +7,7 @@ v4 는 방향을 '차로각 k + 차체 잔차각 θ' 로 분해한다. 이때 he
 AV2 논문은 motion forecasting 트랙이 자동 멀티센서 퓨전 결과이며
 "imperfect tracking" 이라고 명시한다 (arXiv 2301.00493). 실제로 얼마나 그런지 재는 것.
 
-  python src/check_heading_quality.py          # train+val+test 전체 (약 70분, 56코어)
+  python src/check_heading_quality.py          # train+val+test 전체 (약 70분, 워커 56개)
 """
 import sys, os
 from pathlib import Path
@@ -33,7 +33,7 @@ def one(d):
     except Exception:
         return None
 
-def run(split, workers=56):
+def run(split, workers=56):   # 이 머신은 64코어 — 8개는 남겨 둔다
     dirs = [p for p in sorted((ROOT / split).iterdir()) if p.is_dir()]
     with Pool(workers) as pool:
         res = [r for r in pool.imap_unordered(one, dirs, chunksize=200) if r]

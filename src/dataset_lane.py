@@ -58,11 +58,20 @@ class Av2LaneRuleDataset(Dataset):
                  limit: Optional[int] = None, with_rules: bool = True,
                  centerline: str = "api", select: str = "centroid",
                  theta_ch: bool = False, h_src: str = "av2",
-                 routes: bool = False, n_modes: int = N_MODES):
+                 routes: bool = False, n_modes: int = N_MODES,
+                 fallback: str = "fan"):
         """centerline / select 기본값은 dataset_map.py 와 숫자까지 일치하도록 맞춰져 있다.
         (select="nearest" 는 차선까지의 최단거리로 고르는 개선안이지만 기존 실험과 달라진다)
 
         routes=True 면 L3 용으로 후보 경로 K개를 함께 준다 (아래 _routes 참고).
+
+        fallback 은 지도가 경로를 하나도 못 주는 시나리오(val 의 3.75%)를 무엇으로 채울지다.
+        세 값이 **서로 다른 두 가지를 가른다** — 폴백 기하와 모드 예산:
+          "straight1"  직진 1개, mask 합 1   (수정 전 동작. 평가에서 사실상 minADE1)
+          "straight6"  직진을 6슬롯에 복제, mask 합 6  (기하 다양성 0, 모드 예산만 6)
+          "fan"        부채꼴 등곡률 호 6개, mask 합 6  (기하 다양성 + 모드 예산)
+        straight1 -> straight6 차이가 **모드 예산**의 몫이고,
+        straight6 -> fan 차이가 **부채꼴 기하**의 몫이다. 둘을 안 가르면 어느 쪽이 움직였는지 모른다.
 
         theta_ch=True 면 입력에 3채널을 **덧붙인다** (기존 5채널은 그대로 둔다):
             [sin theta, cos theta, valid]      theta = h - k  (차로 대비 잔차각)
@@ -73,6 +82,7 @@ class Av2LaneRuleDataset(Dataset):
         self.with_rules = with_rules
         self.theta_ch, self.h_src = theta_ch, h_src
         self.routes, self.n_modes = routes, n_modes
+        self.fallback = fallback
         self.centerline, self.select = centerline, select
         self.dirs = []
         for d in sorted(self.root.iterdir()):
@@ -194,9 +204,12 @@ class Av2LaneRuleDataset(Dataset):
         표현되므로 ±1.75 로 자르면 표현력이 recall@40 79.7% 에서 막히고, 그렇다고 평평하게
         ±3.6 으로 열면 밴드의 27.6% 가 대향차로가 된다. 규칙상 갈 수 있는 쪽만 넓힌다.
 
-        경로가 하나도 없으면(차로 후보 0개 — 주차장 등) **직진 가상 경로** 하나를 준다.
-        모델이 항상 최소 한 모드는 갖게 하기 위한 것이고, 그런 샘플은 route_mask 의
-        합이 1 이고 밴드가 반폭이라 밖에서 구별된다.
+        경로가 하나도 없으면(차로 후보 0개 — 주차장 등) fallback 인자가 정한 가상 경로를 준다.
+        실측: 부채꼴 6개("fan")는 전체 minADE6 을 1.416 -> 1.424 로 **악화**시킨다. 그 버킷은
+        좋아 보이지만(1.326 -> 0.931) 모드가 1->6 이 되어 생긴 채점 인공물이고, 확률 최상위
+        모드로 재면 1.326 -> 1.420 으로 나빠진다. 손대지 않은 나머지 1,925개도 1.419 -> 1.443
+        으로 나빠지는데, train 의 3.1% 가 바뀌어 gradient 가 모델 전체를 흔들기 때문이다.
+        따라서 기본값은 "fan" 이지만 **현재로서는 "straight1" 이 더 낫다**.
         """
         K, M = self.n_modes, N_RPTS
         rts = lf.build_routes(g, starts, reach, v0=speed) if starts else []
@@ -240,10 +253,26 @@ class Av2LaneRuleDataset(Dataset):
             # 첫 스텝에서 궤적이 튀지 않는다.
             s0, d0, _ = lf.to_frame(np.concatenate([path_city, now]), r)
             SD[i] = (s0[-1], d0[-1])
-        if not rts:                       # 폴백: 현재 진행방향으로 뻗는 직진 경로
+        if not rts:
+            # 지도가 경로를 못 주는 구간(주차장·미매핑 도로 — val 의 3.75%).
+            # 지도가 아무 정보도 안 주므로 다중모드를 기하로 만들 수밖에 없다.
             ln = max(30.0, speed * PRED_SEC + 20.0)
-            P[0, :, 0] = np.linspace(0.0, ln, M); T[0, :, 0] = 1.0
-            B[0] = lf.LANE_HALF_W; L[0] = ln; mask[0] = 1.0
+            arc = np.linspace(0.0, ln, M)
+            n_geo = 1 if self.fallback in ("straight1", "straight6") else K
+            kaps = (np.zeros(1) if n_geo == 1
+                    else np.linspace(-1, 1, K) * np.radians(30.0) / ln)
+            geo = []
+            for kap in kaps:
+                a = kap * arc                                   # 호길이에 비례한 방향각
+                geo.append((np.stack([np.cumsum(np.cos(a)), np.cumsum(np.sin(a))], 1) * (ln / M),
+                            np.stack([np.cos(a), np.sin(a)], 1)))
+            n_slot = 1 if self.fallback == "straight1" else K
+            for i in range(n_slot):
+                P[i], T[i] = geo[i % n_geo]
+                # 차로가 없으니 차로 반폭을 강요할 근거가 없다. 넓은 쪽으로 둔다.
+                B[i] = lf.WIDE_HALF_W; L[i] = ln; mask[i] = 1.0
+                sub[i] = i // n_geo
+            n_dist = n_geo
         return {"routes": torch.from_numpy(P), "route_tan": torch.from_numpy(T),
                 "route_band": torch.from_numpy(B), "route_len": torch.from_numpy(L),
                 "route_sd0": torch.from_numpy(SD), "route_mask": torch.from_numpy(mask),

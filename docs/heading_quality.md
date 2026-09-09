@@ -95,5 +95,5 @@ velocity 와는 거의 일치하고 위치 차분과는 최대 10° 벌어진다
 ## 5. 재현
 
 ```bash
-python src/check_heading_quality.py      # 약 70분 (56코어 병렬)
+python src/check_heading_quality.py      # 약 70분 (워커 56개 — 머신은 64코어)
 ```
