@@ -27,6 +27,7 @@ from dataset_lane import Av2LaneRuleDataset
 from model_v4 import V4Net, N_PTS, N_RULE
 
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
+CACHE_ROOT = "/data/argoverse2/cache/v4"      # prepare_v4.py 가 캐시를 굽는 곳
 ROUTE_KEYS = ("routes", "route_tan", "route_band", "route_len", "route_sd0",
               "route_mask", "route_sub", "v0", "h0")
 
@@ -123,6 +124,9 @@ def main():
     ap.add_argument("--th0", default="current", choices=["current", "guard"],
                     help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--cache", action="store_true",
+                    help="prepare_v4.py 가 구운 전처리 캐시로 학습한다 (원본과 bit-exact, 에폭마다 하던 전처리가 사라진다)")
+    ap.add_argument("--cache-root", dest="cache_root", default=CACHE_ROOT)
     args = ap.parse_args()
 
     use_rules = bool(args.rules)
@@ -135,8 +139,26 @@ def main():
     lim = None if args.limit == 0 else args.limit
     dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src,
                routes=args.level != "l2", fallback=args.fallback, input_repr=args.input)
-    tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
-    va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
+    if args.cache:
+        # prepare_v4.py 와 같은 규칙(전처리 설정 + 소스 해시)으로 캐시를 찾는다. 소스를 고쳤으면 키가
+        # 달라져 못 찾으므로, 낡은 캐시로 학습하는 일은 구조적으로 막힌다.
+        from dataset_cached import CachedV4Dataset, open_cache
+        src = os.path.dirname(os.path.abspath(__file__))
+        cdir = {sp: open_cache(args.cache_root, sp, dkw, src, n)
+                for sp, n in (("train", args.limit), ("val", args.val_limit))}
+        miss = [sp for sp, d in cdir.items() if d is None]
+        if miss:
+            extra = f" --input {args.input}" if getattr(args, "input", None) else ""
+            raise SystemExit(f"캐시 없음 {miss} — 먼저 같은 인자로 prepare_v4.py 를 돌려라: "
+                             f"python src/prepare_v4.py --level {args.level} --theta {args.theta} "
+                             f"--rules {args.rules} --h-src {args.h_src} --fallback {args.fallback} "
+                             f"--limit {args.limit} --val-limit {args.val_limit}{extra}")
+        tr, va = CachedV4Dataset(cdir["train"]), CachedV4Dataset(cdir["val"])
+        print(f"[cache] train {cdir['train']}", flush=True)
+        print(f"[cache] val   {cdir['val']}", flush=True)
+    else:
+        tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
+        va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
     g = torch.Generator(); g.manual_seed(args.seed)
     tl = DataLoader(tr, batch_size=args.batch, shuffle=True, generator=g,
                     num_workers=args.workers, drop_last=True, persistent_workers=True)

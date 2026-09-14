@@ -47,7 +47,9 @@ CACHE_ROOT = "/data/argoverse2/cache/v4"
 # 캐시 키에 들어가는 소스는 dataset_cached.source_files() 가 import 를 따라가 자동으로 모은다.
 # (손으로 적은 목록에는 heading_decomp.py · dataset_map.py 가 빠져 있었다.)
 
-# 알려진 파라미터 수 (in_dim=5, lane_in=30 = --theta 0 --rules 1 일 때만)
+# 알려진 파라미터 수 — in_dim=5, lane_in=30 (--input raw5 --theta 0 --rules 1) 기준.
+# LSTM 입력층이 4·HID·in_dim = 512·in_dim 이라, 채널 수가 다르면 512·(in_dim − 5) 만큼 옮겨 대조한다
+# (실측: in_dim 8 → 453,753, in_dim 2 → 450,681).
 KNOWN_PARAMS = {"l2": 414_294, "l3": 452_217, "l0": 452_217}
 
 # 문자열이라 memmap 에 못 넣는 키 — 따로 json 으로 뺀다
@@ -138,7 +140,8 @@ def dataset_kwargs(args):
                 theta_ch=bool(args.theta),
                 h_src=args.h_src,
                 routes=args.level != "l2",
-                fallback=args.fallback)
+                fallback=args.fallback,
+                input_repr=args.input)
 
 
 def cache_key(split, dkw):
@@ -260,7 +263,7 @@ def verify_data(args, cache_dir, split):
     log(f"[{split}] n={n:,}  필드 {len(meta['fields'])}개")
 
     s = ds[0]
-    exp_in_dim = 5 + (3 if args.theta else 0)
+    exp_in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
     check(tuple(s["x"].shape) == (50, exp_in_dim), f"x shape (50,{exp_in_dim})")
     check(tuple(s["y"].shape) == (60, 2), "y shape (60,2)")
     check(tuple(s["lanes"].shape) == (20, 10, 2), "lanes shape (20,10,2)")
@@ -269,6 +272,8 @@ def verify_data(args, cache_dir, split):
         for k in ("routes", "route_tan", "route_band"):
             check(tuple(s[k].shape) == (6, 64, 2), f"{k} shape (6,64,2)")
         check(s["route_sub"].dtype == torch.int64, "route_sub dtype int64")
+        # memmap 은 첫 샘플의 모양을 그대로 쓰므로 모양 오류가 조용히 전파된다 — 여기서 잡는다
+        check("h0" in s and tuple(s["h0"].shape) == (), "h0 는 샘플당 스칼라 ()")
 
     # 전수 통계 — memmap 이라 싸다
     idx = np.arange(n)
@@ -278,8 +283,19 @@ def verify_data(args, cache_dir, split):
     check(np.isfinite(y).all(), "y 에 NaN/Inf 없음")
     x = ds.raw("x")[smp]
     check(np.isfinite(x).all(), "x 에 NaN/Inf 없음")
-    # x[:,4] = head - theta 는 wrap 하지 않는다 (dataset_lane.py:106). ±2π 가 정상이다.
-    log(f"  info  x[:,4] |max| = {np.abs(x[..., 4]).max():.3f} rad  (wrap 안 함, 정상)")
+    if args.input == "raw5":
+        # x[:,4] = head - theta 는 wrap 하지 않는다 (dataset_lane.py). ±2π 가 정상이다.
+        log(f"  info  x[:,4] |max| = {np.abs(x[..., 4]).max():.3f} rad  (wrap 안 함, 정상)")
+    else:
+        # ah2 는 2채널이다. 채널 순서를 가정하지 않고 채널별 범위와 인접 스텝 ±π 점프 비율만 보인다
+        # (각도 채널을 wrap 하면 180° 경계를 지날 때 2π 만큼 튄다).
+        for c in range(x.shape[-1]):
+            lo, hi = float(x[..., c].min()), float(x[..., c].max())
+            msg = f"  info  x[:,{c}] 범위 [{lo:.3f}, {hi:.3f}]"
+            if max(abs(lo), abs(hi)) <= np.pi + 1e-3:          # 값이 [-π, π] 안인 각도 채널만 점프를 센다
+                jump = (np.abs(np.diff(x[..., c], axis=1)) > np.pi).any(1).mean()
+                msg += f"  ±π 점프 시나리오 {100 * jump:.2f}%"
+            log(msg)
 
     if args.level != "l2":
         rm = ds.raw("route_mask")[smp]
@@ -318,18 +334,24 @@ def verify_model(args, cache_dir):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_rules = bool(args.rules)
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = 5 + (3 if args.theta else 0)
+    in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
 
     for level in (("l2", "l3", "l0") if args.all_levels else (args.level,)):
         log(f"\n[{level}]  in_dim={in_dim} lane_in={lane_in}")
-        model = V4Net(in_dim=in_dim, lane_in=lane_in, level=level).to(device)
+        model = V4Net(in_dim=in_dim, lane_in=lane_in, level=level, th0_mode=args.th0).to(device)
         npar = sum(p.numel() for p in model.parameters())
 
         exp = KNOWN_PARAMS.get(level)
-        if in_dim == 5 and lane_in == 30 and exp:
-            check(npar == exp, f"params {npar:,} == 알려진 값 {exp:,}")
+
+        if exp and lane_in == 30:
+
+            exp += 512 * (in_dim - 5)          # LSTM 입력층이 4·HID·in_dim 이라 채널 수만큼 옮겨 대조
+
+            check(npar == exp, f"params {npar:,} == 알려진 값 {exp:,} (in_dim {in_dim})")
+
         else:
-            log(f"  info  params {npar:,} (in_dim/lane_in 이 기준과 달라 대조 생략)")
+
+            log(f"  info  params {npar:,} (lane_in 이 기준과 달라 대조 생략)")
 
         if cache_dir is None:
             log("  skip  캐시가 없어 forward 검증을 건너뛴다")
@@ -394,9 +416,11 @@ def main():
     p.add_argument("--theta", type=int, default=0)      # train_v4 기본은 1, v4 실험은 전부 0
     p.add_argument("--rules", type=int, default=1)
     p.add_argument("--h-src", default="build", choices=("av2", "build"))
-    # 경로 0개 시나리오를 채우는 방식. train_v4.py:110 과 같은 기본값이어야 같은 데이터가
-    # 되고, 캐시 키에 들어가므로 폴백마다 다른 캐시가 생긴다.
-    p.add_argument("--fallback", default="fan", choices=("straight1", "straight6", "fan"))
+    # 아래 세 인자는 train_v4.py 의 같은 이름 인자와 기본값이 같아야 같은 데이터·모델이 된다.
+    # --fallback · --input 은 캐시 키에 들어가므로 값마다 다른 캐시가 생긴다. --th0 는 모델 검증에만 쓴다.
+    p.add_argument("--fallback", default="straight1", choices=("straight1", "straight6", "fan"))
+    p.add_argument("--input", default="raw5", choices=("raw5", "ah2"))
+    p.add_argument("--th0", default="current", choices=("current", "guard"))
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--offlane", type=float, default=0.0)
     p.add_argument("--off-nonwinner", type=int, default=0)
@@ -459,19 +483,20 @@ def main():
 
     log("\n모든 점검 통과. 전처리는 캐시에 구워졌고 모델은 세워진다.")
     log("에폭은 돌리지 않았다. 학습하려면:\n")
-    tag = f"v4_{args.level}_s0"
+    tag = f"v4_{args.level}_{args.input}_s0"
+    if any((REPO / "runs" / f"{tag}{ext}").exists() for ext in (".json", ".log")):
+        log(f"  주의: runs/{tag} 결과가 이미 있다 — 그대로 돌리면 덮어쓴다. --tag 를 바꿔라.")
+    cache_arg = "--cache" + ("" if args.cache_root == CACHE_ROOT else f" --cache-root {args.cache_root}")
     log(f"  PY=/home/user/miniforge3/envs/av2/bin/python")
     log(f"  cd {REPO}")
-    log(f"  $PY src/train_v4.py --level {args.level} --theta {args.theta} "
-        f"--rules {args.rules} --h-src {args.h_src} --fallback {args.fallback} \\")
+    log(f"  $PY src/train_v4.py --level {args.level} --theta {args.theta} --rules {args.rules} "
+        f"--h-src {args.h_src} --fallback {args.fallback} --input {args.input} --th0 {args.th0} \\")
     log(f"      --limit {args.limit} --val-limit {args.val_limit} --epochs 15 "
-        f"--lr 5e-4 --batch {args.batch} \\")
-    log(f"      --workers 24 --outdir runs --tag {tag} > runs/{tag}.log 2>&1")
+        f"--lr 5e-4 --batch {args.batch} {cache_arg} \\")
+    log(f"      --workers 8 --outdir runs --tag {tag} > runs/{tag}.log 2>&1")
     log("")
-    log("주의 — train_v4.py 는 아직 캐시를 읽지 않는다. 캐시를 쓰려면 "
-        "dataset_cached.CachedV4Dataset 로\n"
-        "      갈아끼워야 한다 (README 절 참고). 지금 그대로 돌리면 전처리를 "
-        "다시 한다.")
+    log("--cache 는 방금 구운 캐시를 같은 규칙(설정 + 소스 해시)으로 찾는다. 캐시는 읽기만 하므로 workers 를")
+    log("      전처리 때보다 적게 줘도 된다. 소스를 고치면 키가 바뀌니 이 스크립트를 다시 돌려라.")
 
 
 if __name__ == "__main__":
