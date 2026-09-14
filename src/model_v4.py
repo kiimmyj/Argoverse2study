@@ -99,9 +99,19 @@ def route_point(routes: torch.Tensor, route_tan: torch.Tensor, s: torch.Tensor,
 
 class V4Net(nn.Module):
     def __init__(self, in_dim=5, lane_in=N_PTS * 2 + N_RULE, hid=HID, k=K,
-                 pred_len=PRED_LEN, out_dim=2, route_pts=N_RPTS, level="l3"):
+                 pred_len=PRED_LEN, out_dim=2, route_pts=N_RPTS, level="l3",
+                 th0_mode="current"):
         super().__init__()
         assert level in ("l2", "l3", "l0")
+        assert th0_mode in ("current", "guard")
+        # 적분기 시작 잔차각 θ₀ 규칙.
+        #   current  −k(s0). 정규화 프레임의 0 방향(= AV2 차체 방향)을 진행방향으로 간주한다.
+        #   guard    wrap(h0 − k(s0)) 를 쓰되 |값| > THETA_MAX 면 current 로 되돌린다.
+        # 가드가 없으면 θ 가 첫 스텝부터 ±90° 에 걸려 ds = 0, dd = v·dt 로 궤적이 옆으로 미끄러진다
+        # (실측 val 2,000 살아있는 모드 11,625 중 90° 초과: current 48 / 가드 없는 제안 151 / 가드 44).
+        # 학습과 추론의 규칙이 같아야 한다 — current 로 학습한 가중치에 guard 를 붙이면 시작 오프셋이
+        # 60스텝 내내 남아 minADE6 이 7~8% 나빠진다(실측 l0b 1.594 -> 1.701).
+        self.th0_mode = th0_mode
         self.level, self.k, self.pred_len, self.out_dim = level, k, pred_len, out_dim
         self.lane_in = lane_in
 
@@ -127,7 +137,7 @@ class V4Net(nn.Module):
             self.prob_head = nn.Linear(hid, 1)
 
     # ------------------------------------------------------------------ L0 적분기
-    def rollout(self, act, routes, route_tan, route_len, route_sd0, v0):
+    def rollout(self, act, routes, route_tan, route_len, route_sd0, v0, h0=None):
         """액션 (a, theta) -> 궤적. 순수 함수이고 미분 가능하다.
 
         누적합만으로 끝나 순차 루프가 없다 — 학습 경로와 추론 경로가 같아서
@@ -141,7 +151,11 @@ class V4Net(nn.Module):
         M0 = routes.size(2)
         idx0 = route_sd0[..., 0:1] / route_len.clamp(min=1e-3).unsqueeze(-1) * (M0 - 1)
         t0 = interp1d(route_tan, idx0)
-        th0 = -torch.atan2(t0[..., 1], t0[..., 0])            # (B,K,1)
+        k0 = torch.atan2(t0[..., 1], t0[..., 0])              # (B,K,1) 시작점의 차로 방향각
+        th0 = -k0
+        if self.th0_mode == "guard" and h0 is not None:
+            prop = torch.remainder(h0.view(-1, 1, 1) - k0 + np.pi, 2 * np.pi) - np.pi
+            th0 = torch.where(prop.abs() <= THETA_MAX, prop, th0)
         dth = DTHETA_MAX * torch.tanh(act[..., 1])
         th = (th0 + torch.cumsum(dth, dim=2)).clamp(-THETA_MAX, THETA_MAX)
         # 속도: 음수를 막는다(후진 미지원). clamp 대신 relu 라 gradient 가 살아 있다.
@@ -163,7 +177,7 @@ class V4Net(nn.Module):
     # ------------------------------------------------------------------
     def forward(self, x, lanes, lane_mask, lane_feat=None, routes=None,
                 route_tan=None, route_band=None, route_len=None,
-                route_sd0=None, route_mask=None, route_sub=None, v0=None):
+                route_sd0=None, route_mask=None, route_sub=None, v0=None, h0=None):
         B = x.size(0)
         _, (h, _) = self.traj_encoder(x)
         traj_feat = h[-1]
@@ -199,7 +213,7 @@ class V4Net(nn.Module):
 
         if self.level == "l3":
             return head, logits, {}
-        traj, aux = self.rollout(head, routes, route_tan, route_len, route_sd0, v0)
+        traj, aux = self.rollout(head, routes, route_tan, route_len, route_sd0, v0, h0=h0)
         aux["band"] = interp1d(route_band, aux["idx"])
         return traj, logits, aux
 

@@ -28,7 +28,7 @@ from model_v4 import V4Net, N_PTS, N_RULE
 
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
 ROUTE_KEYS = ("routes", "route_tan", "route_band", "route_len", "route_sd0",
-              "route_mask", "route_sub", "v0")
+              "route_mask", "route_sub", "v0", "h0")
 
 
 def to_dev(b, device, level, use_rules):
@@ -107,7 +107,7 @@ def main():
     ap.add_argument("--rules", type=int, default=1)
     ap.add_argument("--theta", type=int, default=1)
     ap.add_argument("--h-src", dest="h_src", default="build", choices=["av2", "build"])
-    ap.add_argument("--fallback", default="fan", choices=["straight1", "straight6", "fan"],
+    ap.add_argument("--fallback", default="straight1", choices=["straight1", "straight6", "fan"],
                     help="지도가 경로를 못 주는 시나리오를 무엇으로 채울지. "
                          "straight1=직진1개(mask 1) / straight6=직진6복제(모드예산만) / fan=부채꼴6개")
     ap.add_argument("--limit", type=int, default=50000)
@@ -118,6 +118,10 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
+    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2"],
+                    help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향")
+    ap.add_argument("--th0", default="current", choices=["current", "guard"],
+                    help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
@@ -130,7 +134,7 @@ def main():
 
     lim = None if args.limit == 0 else args.limit
     dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src,
-               routes=args.level != "l2", fallback=args.fallback)
+               routes=args.level != "l2", fallback=args.fallback, input_repr=args.input)
     tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
     va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
     g = torch.Generator(); g.manual_seed(args.seed)
@@ -140,11 +144,11 @@ def main():
                     num_workers=args.workers, persistent_workers=True)
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = 5 + (3 if args.theta else 0)
-    model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level).to(device)
+    in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)
+    model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0).to(device)
     npar = sum(p.numel() for p in model.parameters())
     print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "
-          f"fallback {args.fallback} | in_dim {in_dim} "
+          f"fallback {args.fallback} | input {args.input} | th0 {args.th0} | in_dim {in_dim} "
           f"| params {npar:,} | train {len(tr)} val {len(va)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)

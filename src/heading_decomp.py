@@ -58,6 +58,7 @@ from av2.datasets.motion_forecasting import scenario_serialization
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lane_frame import build_routes, densify, tangents, to_frame
 from lane_graph import LaneGraph, REACH_MARGIN_M
+import motion_repr as mr
 
 ROOT = Path("/data/argoverse2/motion_forecasting")
 OBS_LEN = 50
@@ -156,6 +157,41 @@ def build_heading(pos, obs=None, h_ref=None, dt=DT, v_min=V_MIN, jump_deg=JUMP_D
         h[rest] = 0.0 if h_ref is None else guard(np.asarray(h_ref, float), jump_deg)[rest]
         src[rest] = 2
     return h, src
+
+
+def ah_features(pos_obs, head_obs, yaw0, dt=DT, v_min=V_MIN):
+    """v4 입력 2채널 (a, h) 를 **관측 구간만으로** 만든다.
+
+      a   속도 증분 [km/h] / 3   — motion_repr 의 ah0 방식. 누적합하면 속도가 되고 첫 값이 v0 다.
+      h   진행 방향 [rad]        — focal 정규화 프레임, (-pi, pi] 로 wrap
+
+    왜 이 형태인가
+    --------------
+    출력이 (a, h = k + θ) 이므로 입력도 같은 두 양으로 맞춘다. 입력의 h 는 **h 자체**다.
+    지도(차로·후보 경로)는 모델이 따로 받으므로 k 와 θ 로 쪼개 넣을 이유가 없고,
+    그렇게 해야 2채널 제약도 지킨다.
+
+    a 에 v0 를 싣는 이유: (a, h) 만으로는 초기속도가 빠져 궤적을 복원할 수 없다(v0 를
+    모르면 FDE 13.4 m). 첫 스텝이 v0 를 통째로 들고 있으면 누적합으로 속도가 무손실로
+    돌아온다. 예전 ah0_2 실험(minADE6 1.406)과 같은 인코딩이다.
+
+    h 를 AV2 heading 대신 위치차분으로 만드는 이유: AV2 heading 은 차체 방향이라 이동방향과
+    슬립각만큼 어긋난다(방향만 바꿔 다시 굴리면 AV2 1.693 m / 위치차분 기반 0.145 m).
+
+    **관측 구간만 받는다.** build_heading 은 전방차분이라 110 스텝을 다 넣으면 h[49] 가
+    pos[50] — 첫 예측 대상 — 을 보고, 저속 채우기와 뒤집힘 판정도 미래를 본다.
+
+    반환: feat (T,2) float32, h0 = 마지막 관측 스텝의 진행방향(정규화 프레임, rad).
+    h0 는 적분기의 시작 잔차각 θ₀ = wrap(h0 − k(s0)) 에 쓴다. 지금의 θ₀ = −k(s0) 는
+    정규화 프레임의 0 방향(= AV2 차체 방향)을 진행방향으로 간주해 슬립각만큼 어긋난다.
+    """
+    pos_obs = np.asarray(pos_obs, dtype=np.float64)
+    m = mr.traj_to_motion(pos_obs, dt=dt, stop_ms=1.0, smooth=1)
+    a_ch = m.dv_kph / mr.DEFAULT_SCALES["dv_kph"]
+    h_city, _ = build_heading(pos_obs, h_ref=np.asarray(head_obs, dtype=np.float64),
+                              dt=dt, v_min=v_min)
+    h_n = wrap(h_city - float(yaw0))
+    return np.stack([a_ch, h_n], axis=1).astype(np.float32), float(h_n[-1])
 
 
 # ------------------------------------------------------------------ 차로 방향각 k

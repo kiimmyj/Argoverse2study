@@ -31,7 +31,7 @@ from av2.datasets.motion_forecasting import scenario_serialization
 
 from dataset_map import OBS_LEN, PRED_LEN, N_LANES, N_PTS, _resample, _rotation_matrix
 import lane_frame as lf
-from heading_decomp import build_heading, wrap
+from heading_decomp import ah_features, build_heading, wrap
 from lane_graph import LaneGraph, REACH_MARGIN_M
 
 import json
@@ -59,11 +59,17 @@ class Av2LaneRuleDataset(Dataset):
                  centerline: str = "api", select: str = "centroid",
                  theta_ch: bool = False, h_src: str = "av2",
                  routes: bool = False, n_modes: int = N_MODES,
-                 fallback: str = "fan"):
+                 fallback: str = "straight1", input_repr: str = "raw5"):
         """centerline / select 기본값은 dataset_map.py 와 숫자까지 일치하도록 맞춰져 있다.
         (select="nearest" 는 차선까지의 최단거리로 고르는 개선안이지만 기존 실험과 달라진다)
 
         routes=True 면 L3 용으로 후보 경로 K개를 함께 준다 (아래 _routes 참고).
+
+        input_repr 은 궤적 입력 x 의 형태다.
+          "raw5"  (x, y, vx, vy, h_AV2 − yaw0)  기존 기준선. heading 은 AV2 차체 방향이고 wrap 이 없다
+          "ah2"   (a, h) 2채널 — heading_decomp.ah_features. a 는 속도 증분(첫 값 v0),
+                  h 는 h = k + θ 규약의 진행방향 자체(위치차분, 저속만 AV2 보조, wrap).
+                  둘 다 관측 구간만 쓴다.
 
         fallback 은 지도가 경로를 하나도 못 주는 시나리오(val 의 3.75%)를 무엇으로 채울지다.
         세 값이 **서로 다른 두 가지를 가른다** — 폴백 기하와 모드 예산:
@@ -83,6 +89,11 @@ class Av2LaneRuleDataset(Dataset):
         self.theta_ch, self.h_src = theta_ch, h_src
         self.routes, self.n_modes = routes, n_modes
         self.fallback = fallback
+        if input_repr not in ("raw5", "ah2"):
+            raise ValueError(f"input_repr 는 raw5 | ah2 다: {input_repr}")
+        if theta_ch and input_repr == "ah2":
+            raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 는 이미 h 를 담는다")
+        self.input_repr = input_repr
         self.centerline, self.select = centerline, select
         self.dirs = []
         for d in sorted(self.root.iterdir()):
@@ -112,6 +123,15 @@ class Av2LaneRuleDataset(Dataset):
         R = _rotation_matrix(-theta)
         pos_n = (pos - origin) @ R.T
         x = np.concatenate([pos_n, vel @ R.T, (head - theta).reshape(-1, 1)], axis=1)[:OBS_LEN]
+        # v4 입력 2채널 (a, h) 와 적분기 시작 진행방향 h0. 둘 다 **관측 구간만** 쓴다 —
+        # build_heading 은 전방차분이라 110 스텝을 넣으면 h[49] 가 첫 예측 대상 pos[50] 을 본다.
+        # 변수 이름을 h0 로 두면 안 된다 — 아래 규칙 블록의 h0 = (cos θ, sin θ) 가 덮어써서
+        # out["h0"] 가 (2,) 로 나간다 (train 스모크에서 잡힘).
+        h_last = 0.0
+        if self.input_repr == "ah2" or self.routes:
+            feat_ah, h_last = ah_features(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
+            if self.input_repr == "ah2":
+                x = feat_ah
         y = pos_n[OBS_LEN:]
 
         # --- 지도: 원본 JSON에서 직접 그래프를 만든다 ---
@@ -196,6 +216,8 @@ class Av2LaneRuleDataset(Dataset):
 
         if self.routes:
             out.update(self._routes(g, starts, reach, speed, path_city, origin, R))
+            # 적분기 시작 잔차각 θ₀ = wrap(h0 − k(s0)) 에 쓴다 (model_v4 th0_mode="guard").
+            out["h0"] = torch.tensor(h_last, dtype=torch.float32)
         return out
 
     def _routes(self, g, starts, reach, speed, path_city, origin, R):
@@ -213,7 +235,8 @@ class Av2LaneRuleDataset(Dataset):
         좋아 보이지만(1.326 -> 0.931) 모드가 1->6 이 되어 생긴 채점 인공물이고, 확률 최상위
         모드로 재면 1.326 -> 1.420 으로 나빠진다. 손대지 않은 나머지 1,925개도 1.419 -> 1.443
         으로 나빠지는데, train 의 3.1% 가 바뀌어 gradient 가 모델 전체를 흔들기 때문이다.
-        따라서 기본값은 "fan" 이지만 **현재로서는 "straight1" 이 더 낫다**.
+        기본값은 단계 3·4 결과를 재현하도록 "straight1" 이다. 세 방식(straight1 1.4143 /
+        straight6 1.4093 / fan 1.4237)의 차이는 시드 1개라 노이즈 범위다.
         """
         K, M = self.n_modes, N_RPTS
         rts = lf.build_routes(g, starts, reach, v0=speed) if starts else []
