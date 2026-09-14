@@ -1,0 +1,134 @@
+{
+  "tag": "v4_reeval_s0",
+  "what": "기존 체크포인트 재평가(재학습 없음) — 적분기 경로 끝 직선 연장(route_point)과 폴백 경로 첫 점 원점화의 효과",
+  "date": "2026-09-14",
+  "before_commit": "55c52e5",
+  "after_code_sha12": {
+    "model_v4.py": "23aa2128137d",
+    "dataset_lane.py": "4cc19ac6751a"
+  },
+  "data": {
+    "split": "val",
+    "n": 2000,
+    "with_rules": true,
+    "theta_ch": false,
+    "h_src": "build",
+    "routes": true,
+    "fallback": "straight1"
+  },
+  "geometry": {
+    "slots_total": 12000,
+    "live_modes": 11625,
+    "s0_negative_modes": 1262,
+    "s0_negative_frac_of_live_modes": 0.1086,
+    "s0_negative_frac_of_all_slots": 0.1052,
+    "fallback_scenarios": 75,
+    "fallback_first_point_x_median_before_m": 0.4688,
+    "fallback_first_point_abs_max_after_m": 0.0
+  },
+  "rollout_clamp_l0b": {
+    "checkpoint": "runs/lstm_v4_l0b_s0.pth",
+    "horizon_steps": 60,
+    "s0_negative_modes": 1262,
+    "frozen_start_steps_median": 6.0,
+    "frozen_start_steps_p90": 41.0,
+    "past_route_end_mode_frac": 0.0373,
+    "past_route_end_step_frac": 0.0119
+  },
+  "results": {
+    "l0b": {
+      "checkpoint": "runs/lstm_v4_l0b_s0.pth",
+      "level": "l0",
+      "train_log_best": {
+        "minADE6": 1.6664,
+        "minFDE6": 3.9568
+      },
+      "before": {
+        "minADE6": 1.6714,
+        "minFDE6": 3.9567,
+        "val_offlane_steps": 1.3484
+      },
+      "extend": {
+        "minADE6": 1.5993,
+        "minFDE6": 3.624,
+        "val_offlane_steps": 1.3484
+      },
+      "extend+fallback0": {
+        "minADE6": 1.5944,
+        "minFDE6": 3.6256,
+        "val_offlane_steps": 1.3484
+      }
+    },
+    "l4_nw": {
+      "checkpoint": "runs/lstm_v4_l4_nw_s0.pth",
+      "level": "l0",
+      "train_log_best": {
+        "minADE6": 1.7564,
+        "minFDE6": 4.1472
+      },
+      "before": {
+        "minADE6": 1.7669,
+        "minFDE6": 4.153,
+        "val_offlane_steps": 0.7092
+      },
+      "extend": {
+        "minADE6": 1.6915,
+        "minFDE6": 3.8098,
+        "val_offlane_steps": 0.7092
+      },
+      "extend+fallback0": {
+        "minADE6": 1.6823,
+        "minFDE6": 3.8069,
+        "val_offlane_steps": 0.7092
+      }
+    },
+    "l4_all": {
+      "checkpoint": "runs/lstm_v4_l4_all_s0.pth",
+      "level": "l0",
+      "train_log_best": {
+        "minADE6": 1.8257,
+        "minFDE6": 4.3127
+      },
+      "before": {
+        "minADE6": 1.8941,
+        "minFDE6": 4.4745,
+        "val_offlane_steps": 0.6386
+      },
+      "extend": {
+        "minADE6": 1.8327,
+        "minFDE6": 4.1834,
+        "val_offlane_steps": 0.6386
+      },
+      "extend+fallback0": {
+        "minADE6": 1.8107,
+        "minFDE6": 4.1519,
+        "val_offlane_steps": 0.6386
+      }
+    },
+    "l3b": {
+      "checkpoint": "runs/lstm_v4_l3b_s0.pth",
+      "level": "l3",
+      "train_log_best": {
+        "minADE6": 1.4143,
+        "minFDE6": 3.1535
+      },
+      "before": {
+        "minADE6": 1.4156,
+        "minFDE6": 3.1572,
+        "val_offlane_steps": 0.0
+      },
+      "extend": {
+        "minADE6": 1.4156,
+        "minFDE6": 3.1572,
+        "val_offlane_steps": 0.0
+      },
+      "extend+fallback0": {
+        "minADE6": 1.4155,
+        "minFDE6": 3.1567,
+        "val_offlane_steps": 0.0
+      }
+    }
+  },
+  "note": "before 는 학습 로그 best 와 다를 수 있다(학습 이후 데이터 코드 변경). 같은 파일 안의 평가끼리만 비교할 것. 재학습 효과는 포함되지 않는다.",
+  "seconds": 24.2
+}

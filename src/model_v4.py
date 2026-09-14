@@ -72,6 +72,31 @@ def interp1d(arr: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     return a * (1 - f) + b * f
 
 
+def route_point(routes: torch.Tensor, route_tan: torch.Tensor, s: torch.Tensor,
+                route_len: torch.Tensor) -> torch.Tensor:
+    """호길이 s 에 해당하는 중심선 위 점 (B,K,T,2). **경로 양 끝 밖은 끝 접선 방향으로 직선 연장**한다.
+
+    interp1d 만 쓰면 idx 가 [0, M-1] 로 잘린다. 그러면
+      - s0 < 0 인 모드(시작 차로가 차량보다 앞에서 시작한다 — lane_graph.candidate_lanes 의 탐색 반경이
+        5 m 라서)는 s 가 0 을 넘을 때까지 경로 시작점에 얼어붙고,
+      - 경로 길이보다 멀리 가는 모드는 끝점에 붙어 멈춘다.
+    얼마나 자주 일어나는지는 여기 숫자로 적지 않고 runs/v4_reeval_s0.json 의 geometry·rollout_clamp_l0b 에
+    둔다(src/reeval_v4.py 가 쓴다) — 주석과 측정이 서로 다른 숫자를 들고 있지 않게.
+    연장하면 두 경우 모두 위치가 실제 진행대로 움직이고, 잘린 구간에서 끊기던 s 의 gradient 도 산다.
+    접선·밴드 조회는 끝값을 유지하는 interp1d 를 그대로 쓴다 — 연장 구간은 직선이기 때문이다.
+    """
+    M = routes.size(2)
+    L = route_len.clamp(min=1e-3).unsqueeze(-1)                 # (B,K,1)
+    P = interp1d(routes, s / L * (M - 1))
+    t0 = route_tan[:, :, :1, :]
+    t1 = route_tan[:, :, -1:, :]
+    t0 = t0 / t0.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+    t1 = t1 / t1.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+    under = torch.clamp(s, max=0.0).unsqueeze(-1)               # 시작점보다 뒤인 만큼 (음수)
+    over = torch.relu(s - L).unsqueeze(-1)                      # 끝점을 지난 만큼
+    return P + t0 * under + t1 * over
+
+
 class V4Net(nn.Module):
     def __init__(self, in_dim=5, lane_in=N_PTS * 2 + N_RULE, hid=HID, k=K,
                  pred_len=PRED_LEN, out_dim=2, route_pts=N_RPTS, level="l3"):
@@ -126,7 +151,7 @@ class V4Net(nn.Module):
 
         M = routes.size(2)
         idx = s / route_len.clamp(min=1e-3).unsqueeze(-1) * (M - 1)
-        P = interp1d(routes, idx)                             # (B,K,T,2) 중심선 위 점
+        P = route_point(routes, route_tan, s, route_len)   # (B,K,T,2) 중심선 위 점, 양 끝은 직선 연장
         Tg = interp1d(route_tan, idx)
         Tg = Tg / Tg.norm(dim=-1, keepdim=True).clamp(min=1e-6)
         N = torch.stack([-Tg[..., 1], Tg[..., 0]], dim=-1)    # 좌측 법선

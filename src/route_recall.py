@@ -24,8 +24,10 @@ past 가 더 좋다면 L3 의 모드 순서를 이걸로 매기면 되고, 그�
   python src/route_recall.py --limit 3000
 """
 import argparse
+import hashlib
 import json
 import sys
+import time
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
@@ -48,7 +50,9 @@ def one(d, min_move_m=0.0):
         pos, vel, hav2 = focal(d)
         if len(pos) < OBS_LEN + 2:
             return None
-        h, _ = build_heading(pos, h_ref=hav2)
+        # 관측 구간만 넘긴다 — 전방차분이라 전체를 넣으면 h[OBS_LEN-1] 이 첫 미래 위치를 쓰고,
+        # 그 방향이 아래 candidate_lanes 의 시작 차로 선택에 들어가 recall 을 미래 쪽으로 기울인다.
+        h, _ = build_heading(pos[:OBS_LEN], h_ref=hav2[:OBS_LEN])
         g = graph_of(d)
         p0 = pos[OBS_LEN - 1]
         h0 = np.array([np.cos(h[OBS_LEN - 1]), np.sin(h[OBS_LEN - 1])])
@@ -94,6 +98,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--min-move", dest="min_move", type=float, default=10.0,
                     help="이 거리 미만만 움직인 시나리오는 따로 집계 (정지 차량은 경로가 무의미)")
+    ap.add_argument("--out", default=None,
+                    help="표를 json 으로 남긴다 (예: runs/v4_route_recall.json) — 문서 수치의 출처")
     a = ap.parse_args()
     dirs = [p for p in sorted((ROOT / a.split).iterdir()) if p.is_dir()][:a.limit]
     with Pool(a.workers) as pool:
@@ -121,6 +127,21 @@ def main():
                     row += f"  {v:6.1f}%{mark}"
                 print(row)
     print("\n* = 문서 판정선 recall@5 >= 0.90 충족")
+
+    if a.out:
+        # 두 모집단(전체 / 일정 거리 이상 이동)을 모두 남긴다 — 게이트를 어느 쪽으로 읽느냐에 따라 미달 폭이 달라진다.
+        subsets = {"all": sel_all, f"move>={a.min_move:g}m": sel_mov}
+        table = {tag: {"n": int(sel.sum()),
+                       "recall": {name: {str(w): {str(K): round(float(
+                           np.array([r[0][(name, w, K)] for r in res])[sel].mean()), 4)
+                           for K in KS} for w in WS + ("rule",)} for name in ("length", "past")}}
+                 for tag, sel in subsets.items()}
+        out = {"tag": Path(a.out).stem, "date": time.strftime("%Y-%m-%d"),
+               "code_sha12": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12],
+               "args": vars(a), "scenarios": len(res), "table": table,
+               "keys": "table[모집단].recall[정렬(length=현행 길이순, past=과거 적합도)][밴드 w 또는 rule][K]"}
+        Path(a.out).write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+        print("wrote", a.out)
 
 
 if __name__ == "__main__":

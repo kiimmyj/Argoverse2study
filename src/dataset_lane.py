@@ -143,8 +143,12 @@ class Av2LaneRuleDataset(Dataset):
             #   k : 진행방향과 같은 쪽을 향하는 가장 가까운 중심선 점의 접선각
             #   valid : 5 m 안에 그런 점이 없으면 0 — "여기서는 차로를 믿지 마라"
             if self.h_src == "build":
-                h_city, _ = build_heading(pos.astype(np.float64), h_ref=head.astype(np.float64))
-                h_n = wrap(h_city - theta)[:OBS_LEN]
+                # 관측 구간만 넘긴다. build_heading 은 전방차분(h[a] 는 pos[a] -> pos[a+1] 방향)이라
+                # 110스텝을 다 넣으면 h[49] 가 pos[50] — 첫 예측 대상 — 을 쓰고, 저속 구간의 채우기와
+                # 뒤집기 판정도 미래를 본다. 미래 스텝만 흔들어도 x 의 θ 3채널이 바뀌던 누수다.
+                h_city, _ = build_heading(pos[:OBS_LEN].astype(np.float64),
+                                          h_ref=head[:OBS_LEN].astype(np.float64))
+                h_n = wrap(h_city - theta)
             else:
                 h_n = wrap((head - theta).astype(np.float64))[:OBS_LEN]
             P = np.concatenate([norm[l] for l in sel]).astype(np.float64)
@@ -264,7 +268,10 @@ class Av2LaneRuleDataset(Dataset):
             geo = []
             for kap in kaps:
                 a = kap * arc                                   # 호길이에 비례한 방향각
-                geo.append((np.stack([np.cumsum(np.cos(a)), np.cumsum(np.sin(a))], 1) * (ln / M),
+                # 첫 점이 원점이어야 route_sd0 = (0, 0) 과 맞는다. cumsum 을 그대로 쓰면 첫 점이
+                # ln/M (0.47~1.44 m) 앞에서 시작해 L0 적분기의 출발점이 그만큼 밀린다.
+                xy = np.stack([np.cos(a[:-1]), np.sin(a[:-1])], 1).cumsum(0) * (ln / (M - 1))
+                geo.append((np.vstack([np.zeros((1, 2)), xy]),
                             np.stack([np.cos(a), np.sin(a)], 1)))
             n_slot = 1 if self.fallback == "straight1" else K
             for i in range(n_slot):
