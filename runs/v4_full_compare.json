@@ -1,0 +1,295 @@
+{
+  "val_cache": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
+  "label_dtheta_deg": 7.3,
+  "runs": {
+    "v4_l0b_s0": {
+      "name": "L0 5채널 50k",
+      "input": "raw5",
+      "th0": "current",
+      "train_n": 50000,
+      "val_n_selected": 2000,
+      "smooth": 0.0,
+      "offlane": 0.0,
+      "best_epoch": 14,
+      "logged_best": [
+        1.6664202480316161,
+        3.9568030281066893
+      ],
+      "epoch_sec_median": 280.15886330604553,
+      "total_min": 89.99518804947535,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.5944158306121827,
+        "minFDE6": 3.625595520019531,
+        "offlane": 1.3483583333333333,
+        "dtheta_over_label_pct": 0.6005467468562056,
+        "jitter_theta": 0.2203443771926827,
+        "jitter_a": 0.3748976198714006
+      }
+    },
+    "v4_l0_ah2_s0": {
+      "name": "L0 50k",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 50000,
+      "val_n_selected": 2000,
+      "smooth": 0.0,
+      "offlane": 0.0,
+      "best_epoch": 14,
+      "logged_best": [
+        1.5928817005157472,
+        3.783422134399414
+      ],
+      "epoch_sec_median": 213.49507355690002,
+      "total_min": 53.665669524669646,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.5928817005157472,
+        "minFDE6": 3.783422134399414,
+        "offlane": 1.5588583333333337,
+        "dtheta_over_label_pct": 0.15425551303080007,
+        "jitter_theta": 0.18818889863612287,
+        "jitter_a": 0.2706038206784217
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.5641609458746253,
+        "minFDE6": 3.71181881933455,
+        "offlane": 1.5392455045088311,
+        "dtheta_over_label_pct": 0.18212331766751425,
+        "jitter_theta": 0.1916381678948122,
+        "jitter_a": 0.27508744864618406
+      }
+    },
+    "v4_l0_ah2_full_s0": {
+      "name": "L0 전체",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 0.0,
+      "offlane": 0.0,
+      "best_epoch": 14,
+      "logged_best": [
+        1.4485205159829257,
+        3.39288787023533
+      ],
+      "epoch_sec_median": 119.81850409507751,
+      "total_min": 28.812139995892842,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.4780438919067382,
+        "minFDE6": 3.4338366928100585,
+        "offlane": 1.5854166666666671,
+        "dtheta_over_label_pct": 35.336030617823944,
+        "jitter_theta": 1.573112406312648,
+        "jitter_a": 1.2130811228528795
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.4485205159829257,
+        "minFDE6": 3.39288787023533,
+        "offlane": 1.5634724667840547,
+        "dtheta_over_label_pct": 35.27776403037046,
+        "jitter_theta": 1.5736039040216798,
+        "jitter_a": 1.2165603610552023
+      }
+    },
+    "v4_l0_ah2_full_sm1_s0": {
+      "name": "L0 전체·벌점1",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 0.0,
+      "best_epoch": 13,
+      "logged_best": [
+        1.5849194881609578,
+        3.8725160235726626
+      ],
+      "epoch_sec_median": 127.24647259712219,
+      "total_min": 31.82403620481491,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.571268424987793,
+        "minFDE6": 3.8263718452453612,
+        "offlane": 1.6211999999999995,
+        "dtheta_over_label_pct": 0.06677601603790778,
+        "jitter_theta": 4.964661183243396e-05,
+        "jitter_a": 0.0002897273324890304
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.5849194881609578,
+        "minFDE6": 3.8725160235726626,
+        "offlane": 1.6010838535830534,
+        "dtheta_over_label_pct": 0.08489283403164975,
+        "jitter_theta": 5.3700086246412895e-05,
+        "jitter_a": 0.00029849443440175015
+      }
+    },
+    "v4_l0_ah2_full_sm0.1_s0": {
+      "name": "L0 전체·벌점0.1",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 0.1,
+      "offlane": 0.0,
+      "best_epoch": 10,
+      "logged_best": [
+        1.5199055134324584,
+        3.6604302216858526
+      ],
+      "epoch_sec_median": 131.38313460350037,
+      "total_min": 32.58829296032588,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.509851884841919,
+        "minFDE6": 3.594455379486084,
+        "offlane": 1.6271166666666665,
+        "dtheta_over_label_pct": 0.00029159832330964095,
+        "jitter_theta": 0.003694843946442657,
+        "jitter_a": 0.01146410291868849
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.5199055134324584,
+        "minFDE6": 3.6604302216858526,
+        "offlane": 1.5983498746064773,
+        "dtheta_over_label_pct": 0.005952886753216193,
+        "jitter_theta": 0.0038408724474944702,
+        "jitter_a": 0.011576904866834213
+      }
+    },
+    "v4_l4_nw_s0": {
+      "name": "L4 5채널 50k",
+      "input": "raw5",
+      "th0": "current",
+      "train_n": 50000,
+      "val_n_selected": 2000,
+      "smooth": 0.0,
+      "offlane": 1.0,
+      "best_epoch": 15,
+      "logged_best": [
+        1.7563787994384765,
+        4.14719051361084
+      ],
+      "epoch_sec_median": 283.6509039402008,
+      "total_min": 90.0582513332367,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.6823362007141114,
+        "minFDE6": 3.806868682861328,
+        "offlane": 0.709183333333333,
+        "dtheta_over_label_pct": 5.229086932750136,
+        "jitter_theta": 0.29029154706579186,
+        "jitter_a": 0.2389932765442751
+      }
+    },
+    "v4_l4nw_ah2_s0": {
+      "name": "L4 50k",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 50000,
+      "val_n_selected": 2000,
+      "smooth": 0.0,
+      "offlane": 1.0,
+      "best_epoch": 10,
+      "logged_best": [
+        1.7051959686279297,
+        3.9470496711730956
+      ],
+      "epoch_sec_median": 214.66755414009094,
+      "total_min": 53.718929660320285,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.7051959686279297,
+        "minFDE6": 3.9470496711730956,
+        "offlane": 0.8969749999999999,
+        "dtheta_over_label_pct": 3.360962274466922,
+        "jitter_theta": 0.1718984394577524,
+        "jitter_a": 0.11750558991707673
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.677503046310862,
+        "minFDE6": 3.9124197604962685,
+        "offlane": 0.871226188570513,
+        "dtheta_over_label_pct": 3.4196182868945915,
+        "jitter_theta": 0.17272563229772575,
+        "jitter_a": 0.11928447345665931
+      }
+    },
+    "v4_l4nw_ah2_full_s0": {
+      "name": "L4 전체",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 0.0,
+      "offlane": 1.0,
+      "best_epoch": 14,
+      "logged_best": [
+        1.4802121058910278,
+        3.4092350199983197
+      ],
+      "epoch_sec_median": 123.48632645606995,
+      "total_min": 31.16089459657669,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.5162495880126954,
+        "minFDE6": 3.438142036437988,
+        "offlane": 0.6090249999999999,
+        "dtheta_over_label_pct": 19.12564242755604,
+        "jitter_theta": 0.9452687303512849,
+        "jitter_a": 0.7667231980134864
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.4802121058910278,
+        "minFDE6": 3.4092350199983197,
+        "offlane": 0.5989608345339098,
+        "dtheta_over_label_pct": 19.64663897679448,
+        "jitter_theta": 0.9514075593432776,
+        "jitter_a": 0.770614189403089
+      }
+    },
+    "v4_l4nw_ah2_full_sm1_s0": {
+      "name": "L4 전체·벌점1",
+      "input": "ah2",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 1.0,
+      "best_epoch": 5,
+      "logged_best": [
+        1.5862788025886703,
+        3.7751231192779175
+      ],
+      "epoch_sec_median": 132.6926200389862,
+      "total_min": 32.906131303310396,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.6239492197036742,
+        "minFDE6": 3.8374133796691896,
+        "offlane": 0.8320750000000001,
+        "dtheta_over_label_pct": 0.6495352651722253,
+        "jitter_theta": 0.0012653557325682614,
+        "jitter_a": 0.0025647212084642804
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.5862788025886703,
+        "minFDE6": 3.7751231192779175,
+        "offlane": 0.8084847393415504,
+        "dtheta_over_label_pct": 0.7013901274524726,
+        "jitter_theta": 0.0012561974098630555,
+        "jitter_a": 0.002633740129716869
+      }
+    }
+  },
+  "sec": 102.4134361743927
+}

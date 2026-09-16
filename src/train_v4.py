@@ -5,6 +5,7 @@ train_v4.py - v4 를 레벨별로 누적 학습한다.
   L3 : python src/train_v4.py --level l3
   L0 : python src/train_v4.py --level l0
   L4 : python src/train_v4.py --level l0 --offlane 1.0
+  흔들림 벌점 : 위 L0/L4 명령에 --smooth 1.0            (액션 스텝간 변화 제곱, jitter() 참고)
 
 손실·평가·하이퍼파라미터는 train_lane.py(기준선 minADE6 1.292) 와 같다.
 다른 것은 모델과 Dataset 이 주는 필드뿐이라, 지표 차이가 나면 레벨 때문이다.
@@ -24,8 +25,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset_lane import Av2LaneRuleDataset
-from model_v4 import V4Net, N_PTS, N_RULE
+from model_v4 import V4Net, N_PTS, N_RULE, A_SCALE, DTHETA_MAX
 
+LABEL_DTHETA_DEG = 7.3     # 실제 차량의 스텝간 방향 변화 p99.99 (라벨 전수조사). 넘으면 못 내는 요레이트다
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
 CACHE_ROOT = "/data/argoverse2/cache/v4"      # prepare_v4.py 가 캐시를 굽는 곳
 ROUTE_KEYS = ("routes", "route_tan", "route_band", "route_len", "route_sd0",
@@ -72,11 +74,35 @@ def loss_fn(traj, logits, y, mode_mask, aux, w_off, nonwinner_only=False):
     return loss, off.detach()
 
 
+def jitter_steps(aux):
+    """(B,K,T-1) 스텝별 흔들림 = Δ(a / A_SCALE)² + Δ(dθ / DTHETA_MAX)²."""
+    ua = aux["a"] / A_SCALE
+    ut = aux["dtheta"] / DTHETA_MAX
+    return (ua[..., 1:] - ua[..., :-1]) ** 2 + (ut[..., 1:] - ut[..., :-1]) ** 2
+
+
+def jitter(aux, mode_mask):
+    """흔들림 벌점 — 액션 (a, dθ) 의 이웃 스텝 차이 제곱 평균 (살아있는 모든 모드).
+
+    DTHETA_MAX 레이트 상한은 **크기만** 막고, 부호가 매 스텝 뒤집히는 진동은 막지 않는다.
+    dθ 가 ±8° 로 번갈아 나오거나 a 가 가속·감속을 번갈아 내도 위치는 수 cm 밖에 안 흔들려서
+    거리 손실이 이 방향을 감독하지 못한다. 전체 데이터(스텝 4배)로 학습한 (a, h) 판에서 두 채널이
+    모두 상한까지 포화한 채 지그재그했고, 승자 모드도 마찬가지였다 — 그래서 L4 와 달리 승자를 빼지 않는다.
+
+    두 채널을 각자 출력 상한으로 나눠 단위를 없앤다. 눈금: 1°/step² 나 1 m/s²/step(저크 10 m/s³) 은
+    채널당 (1/8)² ≈ 0.016 이고, 상한끼리 뒤집는 지그재그는 채널당 4 다.
+    """
+    j = jitter_steps(aux)
+    m = mode_mask.unsqueeze(-1)
+    return (j * m).sum() / m.sum().clamp(min=1) / j.size(2)
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, level, use_rules):
     model.eval()
     ade = fde = off = n = 0.0
     dth = []                       # 스텝간 |dtheta| — 궤적이 지그재그인지 재는 계기.
+    exc = live = jit = 0.0         # 살아있는 모드만: 라벨 상한 초과 step 수, step 수, 흔들림 합
     for b in loader:
         y = b["y"].to(device)
         traj, _, aux = model(**to_dev(b, device, level, use_rules))
@@ -91,12 +117,18 @@ def evaluate(model, loader, device, level, use_rules):
             o = (torch.relu(aux["d"] - aux["band"][..., 0])
                  + torch.relu(-aux["d"] - aux["band"][..., 1]))
             off += ((o > 0).float() * mm.unsqueeze(-1)).sum().item() / max(o.size(2), 1)
-            # 실제 차량의 스텝간 방향 변화는 p99.99 가 7.3° 다(라벨 전수조사).
-            # 이보다 크면 물리적으로 못 내는 요레이트다.
+            # dθ p99 는 빈 슬롯까지 섞인 기존 계기라 그대로 둔다. 실현가능성 판정은 아래의
+            # 살아있는 모드 기준 초과 비율로 한다 — p99 는 초과가 1% 를 넘으면 상한에 붙어 더 안 움직인다.
             th = aux["theta"]
-            dth.append((th[:, :, 1:] - th[:, :, :-1]).abs().flatten() * 180.0 / np.pi)
+            dd = (th[:, :, 1:] - th[:, :, :-1]).abs() * 180.0 / np.pi
+            dth.append(dd.flatten())
+            lm = mm.unsqueeze(-1)
+            exc += ((dd > LABEL_DTHETA_DEG).float() * lm).sum().item()
+            live += lm.sum().item() * dd.size(2)
+            jit += (jitter_steps(aux) * lm).sum().item()
     q = (float(torch.cat(dth).median()), float(torch.cat(dth).quantile(0.99))) if dth else (0.0, 0.0)
-    return ade / n, fde / n, off / n, q
+    feas = {"dtheta_over_label_pct": 100.0 * exc / max(live, 1.0), "jitter": jit / max(live, 1.0)}
+    return ade / n, fde / n, off / n, q, feas
 
 
 def main():
@@ -123,6 +155,8 @@ def main():
                     help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향")
     ap.add_argument("--th0", default="current", choices=["current", "guard"],
                     help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
+    ap.add_argument("--smooth", type=float, default=0.0,
+                    help="흔들림 벌점 가중치 — 액션 (a, dθ) 의 스텝간 변화 제곱 (jitter). 0 이면 기존 손실 그대로")
     ap.add_argument("--tag", default="")
     ap.add_argument("--cache", action="store_true",
                     help="prepare_v4.py 가 구운 전처리 캐시로 학습한다 (원본과 bit-exact, 에폭마다 하던 전처리가 사라진다)")
@@ -131,7 +165,7 @@ def main():
 
     use_rules = bool(args.rules)
     tag = args.tag or f"v4_{args.level}" + (f"_off{args.offlane:g}" if args.offlane else "") \
-        + f"_s{args.seed}"
+        + (f"_sm{args.smooth:g}" if args.smooth else "") + f"_s{args.seed}"
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.outdir, exist_ok=True)
@@ -176,7 +210,7 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     hist, best = [], (1e9, 1e9)
     for epoch in range(1, args.epochs + 1):
-        model.train(); t0 = time.time(); run = seen = 0.0; roff = 0.0
+        model.train(); t0 = time.time(); run = seen = 0.0; roff = 0.0; rsm = 0.0
         for b in tl:
             y = b["y"].to(device)
             traj, logits, aux = model(**to_dev(b, device, args.level, use_rules))
@@ -184,21 +218,29 @@ def main():
                   else torch.ones(traj.shape[:2], device=device))
             loss, off = loss_fn(traj, logits, y, mm, aux, args.offlane,
                                 bool(args.off_nonwinner))
+            if args.smooth > 0 and aux:
+                sm = jitter(aux, mm)
+                loss = loss + args.smooth * sm
+                rsm += float(sm.detach()) * y.size(0)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step()
             run += loss.item() * y.size(0); roff += float(off) * y.size(0); seen += y.size(0)
-        ade, fde, ooff, (dth50, dth99) = evaluate(model, vl, device, args.level, use_rules)
+        ade, fde, ooff, (dth50, dth99), feas = evaluate(model, vl, device, args.level, use_rules)
         hist.append({"epoch": epoch, "loss": run / seen, "offlane": roff / seen,
+                     "smooth": rsm / seen,
                      "minADE6": ade, "minFDE6": fde, "val_offlane_steps": ooff,
                      "dtheta_p50_deg": dth50, "dtheta_p99_deg": dth99,
+                     "val_dtheta_over_label_pct": feas["dtheta_over_label_pct"],
+                     "val_jitter": feas["jitter"],
                      "sec": time.time() - t0})
         if ade < best[0]:
             best = (ade, fde)
             torch.save(model.state_dict(), f"{args.outdir}/lstm_{tag}.pth")
         print(f"[{tag}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | minADE6 {ade:.3f} | "
               f"minFDE6 {fde:.3f} | 이탈 {ooff:.2f} | dθ p99 {dth99:.1f}° | "
-              f"{time.time()-t0:.0f}s", flush=True)
+              f"{LABEL_DTHETA_DEG:g}°초과 {feas['dtheta_over_label_pct']:.2f}% | "
+              f"흔들림 {feas['jitter']:.3f} | {time.time()-t0:.0f}s", flush=True)
 
     json.dump({"tag": tag, "level": args.level, "offlane": args.offlane,
                "off_nonwinner": bool(args.off_nonwinner),
