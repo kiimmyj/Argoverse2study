@@ -60,7 +60,12 @@ model: inherit
 1. `src/viz_v4_dump.py`: 추론 덤프. 재현 확인이 어긋나면 멈추고 보고한다.
 2. `src/viz_v4_cases.py`: 좋음·평균·안좋음·최악 각 9개와 3×3 개요.
 3. `src/viz_v4_stats.py`: 상황·조건별, 손실 분해, 다양성, `data/summary.json`.
-4. 리포트는 `docs/v4_viz_<tag>.md` (기존 주 모델 리포트는 `docs/v4_viz_report.md`).
+4. `src/viz_v4_gallery.py --rule both [--compare <tag2>]`: **평균 사례 궤적 그림**을 그린다.
+   - 평균값 기준: (minADE6, minFDE6) 가 평균에 가장 가까운 9개.
+   - 중앙값 기준: minFDE6 가운데 9개(예전 v3 평균 그림과 같은 규칙).
+   - `--compare` 를 주면 같은 시나리오에서 두 판의 best·1위를 비교한다.
+   - v3 겹치기는 GPU 에서만 된다(CPU 는 결과가 최대 0.23 m 다르다).
+5. 리포트는 `docs/v4_viz_<tag>.md` (기존 주 모델 리포트는 `docs/v4_viz_report.md`).
 
 ## 표준 작업 B — 에폭별 학습 방향 분석 (`src/viz_v4_epochs.py --tag <tag>`)
 "모델이 어느 방향으로 학습되고 있는지" 설명하는 것이 목적이다.
