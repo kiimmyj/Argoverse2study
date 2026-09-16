@@ -7,8 +7,9 @@
 #   l4 : l0 + 차로 이탈 단측 hinge
 cd /home/user/Argoverse2study
 PY=/home/user/miniforge3/envs/av2/bin/python
+# --smooth 0 — 2026-09-16 부터 L0 기본에 흔들림 벌점(1.0)이 들어가므로, 벌점 없이 학습한 이 판들을 재현하려면 끈다.
 COMMON="--theta 0 --rules 1 --seed 0 --limit 50000 --val-limit 2000 --epochs 15 \
-        --lr 5e-4 --batch 32 --workers 24 --outdir runs"
+        --lr 5e-4 --batch 32 --workers 24 --outdir runs --smooth 0"
 for LV in "$@"; do
   case $LV in
     l2|l3|l0) $PY src/train_v4.py --level $LV $COMMON --tag v4_${LV}_s0 \

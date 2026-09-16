@@ -3,9 +3,12 @@ train_v4.py - v4 를 레벨별로 누적 학습한다.
 
   L2 : python src/train_v4.py --level l2                       (= 기준선 재현)
   L3 : python src/train_v4.py --level l3
-  L0 : python src/train_v4.py --level l0
+  L0 : python src/train_v4.py --level l0                       (흔들림 벌점 1.0 포함 — 아래)
   L4 : python src/train_v4.py --level l0 --offlane 1.0
-  흔들림 벌점 : 위 L0/L4 명령에 --smooth 1.0            (액션 스텝간 변화 제곱, jitter() 참고)
+
+L0 는 '액션 출력 + Frenet 적분기 + 흔들림 벌점'이다 (2026-09-16 사용자 결정).
+흔들림은 액션 출력이 만드는 문제라 L0 의 일부로 두고, --level l0 이면 --smooth 기본값이 1.0 이다
+(jitter() 참고). 예전 L0 결과(벌점 없음)를 재현하려면 --smooth 0 을 준다.
 
 손실·평가·하이퍼파라미터는 train_lane.py(기준선 minADE6 1.292) 와 같다.
 다른 것은 모델과 Dataset 이 주는 필드뿐이라, 지표 차이가 나면 레벨 때문이다.
@@ -28,6 +31,7 @@ from dataset_lane import Av2LaneRuleDataset
 from model_v4 import V4Net, N_PTS, N_RULE, A_SCALE, DTHETA_MAX
 
 LABEL_DTHETA_DEG = 7.3     # 실제 차량의 스텝간 방향 변화 p99.99 (라벨 전수조사). 넘으면 못 내는 요레이트다
+SMOOTH_L0_DEFAULT = 1.0    # L0 의 흔들림 벌점 기본 가중치 — L0·L4 둘 다 실험한 값 (0.1 과 최근 5에폭 평균이 같다)
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
 CACHE_ROOT = "/data/argoverse2/cache/v4"      # prepare_v4.py 가 캐시를 굽는 곳
 ROUTE_KEYS = ("routes", "route_tan", "route_band", "route_len", "route_sd0",
@@ -151,17 +155,21 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
-    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2"],
-                    help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향")
+    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz"],
+                    help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향 / "
+                         "ah2_2hz=같은 (a, h) 를 위치 평활 뒤 2 Hz 로 뽑은 10스텝")
     ap.add_argument("--th0", default="current", choices=["current", "guard"],
                     help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
-    ap.add_argument("--smooth", type=float, default=0.0,
-                    help="흔들림 벌점 가중치 — 액션 (a, dθ) 의 스텝간 변화 제곱 (jitter). 0 이면 기존 손실 그대로")
+    ap.add_argument("--smooth", type=float, default=None,
+                    help="흔들림 벌점 가중치 — 액션 (a, dθ) 의 스텝간 변화 제곱 (jitter). "
+                         "주지 않으면 level l0 은 1.0(L0 의 일부), 그 밖은 0. 0 이면 기존 손실 그대로")
     ap.add_argument("--tag", default="")
     ap.add_argument("--cache", action="store_true",
                     help="prepare_v4.py 가 구운 전처리 캐시로 학습한다 (원본과 bit-exact, 에폭마다 하던 전처리가 사라진다)")
     ap.add_argument("--cache-root", dest="cache_root", default=CACHE_ROOT)
     args = ap.parse_args()
+    if args.smooth is None:
+        args.smooth = SMOOTH_L0_DEFAULT if args.level == "l0" else 0.0
 
     use_rules = bool(args.rules)
     tag = args.tag or f"v4_{args.level}" + (f"_off{args.offlane:g}" if args.offlane else "") \
@@ -200,7 +208,7 @@ def main():
                     num_workers=args.workers, persistent_workers=True)
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)
+    in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)
     model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0).to(device)
     npar = sum(p.numel() for p in model.parameters())
     print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "

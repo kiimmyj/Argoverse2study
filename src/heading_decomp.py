@@ -194,6 +194,56 @@ def ah_features(pos_obs, head_obs, yaw0, dt=DT, v_min=V_MIN):
     return np.stack([a_ch, h_n], axis=1).astype(np.float32), float(h_n[-1])
 
 
+SG_WINDOW, SG_ORDER = 5, 2     # 2 Hz 입력 전 평활: Savitzky–Golay 0.5초 창, 2차
+DS_STEP = 5                    # 10 Hz -> 2 Hz
+# 창 가장자리 램프: AV2 위치 트랙은 11초 창의 **양 끝** 0.5초에서 위치차분 속력이 실제보다 낮다
+# (val 2,000 중 1~1.5초에 3 m/s 넘게 움직이는 focal 1,292대: 첫 스텝 속도가 1~1.5초 속도의 중앙 48%,
+#  첫 0.5초 |가속도| 중앙 6~10 m/s² vs 이후 1.0, 첫 스텝이 80% 미만인 차량 96.4%. 창 끝도 대칭으로 0.99 → 0.48배이고,
+#  주변 차량 트랙도 같으며, 속도 필드에는 끝 쪽 감소가 없다) — 창 단위 위치 평활의 경계 효과로 보인다(원인 미확인).
+# 끝 쪽은 정답 y 의 마지막 0.5초에 인공 감속으로 들어간다(docs/v4_viz_report.md 발견 6).
+# 2 Hz 판은 첫 표본이 인덱스 4 라 램프를 대부분 피하지만, 평활 창에 인덱스 0~3 이 섞이지 않게 잘라낸다.
+RAMP_SKIP = 4
+
+
+def ah_features_2hz(pos_obs, head_obs, yaw0, dt=DT, step=DS_STEP, v_min=V_MIN,
+                    sg_window=SG_WINDOW, sg_order=SG_ORDER):
+    """v4 입력 (a, h) 의 2 Hz 판 — 관측 위치를 평활한 뒤 0.5초마다 뽑아 ah_features 와 같은 방식으로 만든다.
+
+    왜
+    --
+    10 Hz 위치차분은 스텝당 변위가 수 cm 라 저속에서 방향·속도 잡음이 크고, 50스텝이 거의 같은 값을 되풀이한다.
+    0.5초 간격이면 스텝당 변위가 5배라 잡음 비중이 줄고, LSTM 이 보는 길이도 50 -> 10 으로 준다.
+    평활은 **뽑기 전에** 건다 — 뽑기만 하면 0.1초짜리 흔들림이 0.5초 값에 그대로 섞인다(aliasing).
+    Savitzky–Golay 는 관측 배열 안에서만 다항식을 맞추므로(mode='interp') 미래를 보지 않는다.
+
+    무엇이 같고 무엇이 다른가
+    -------------------------
+    뽑는 시점은 t = −4.5, −4.0, …, 0 s (인덱스 4, 9, …, 49) — 마지막 관측(정규화 원점)이 반드시 들어간다.
+    a = 0.5초 구간 속도 증분 [km/h] / 3 (첫 값 v0, 마지막 0 — 10 Hz 판과 같은 규약),
+    h = 0.5초 구간 진행방향(정규화 프레임, wrap). 1 m/s 미만 구간은 AV2 heading 으로 메운다.
+    AV2 heading 의 튐 가드(JUMP_DEG)는 **10 Hz 스텝 기준**이라 10 Hz 에서 먼저 걸고 뽑는다 —
+    0.5초 간격에 그대로 걸면 정상 저속 회전(73°/s × 0.5 s ≈ 37°)까지 튐으로 잘린다.
+    적분기의 h0 는 이 함수가 아니라 10 Hz ah_features 의 값을 쓴다(출력 쪽은 바꾸지 않는다).
+    평활은 인덱스 RAMP_SKIP(=4) 부터만 한다 — 그 앞은 창 가장자리 램프라 평활 창에 섞이면 첫 표본이 끌려간다.
+
+    반환: feat (ceil((T − RAMP_SKIP)/step), 2) float32 — T=50 이면 (10, 2).
+    """
+    from scipy.signal import savgol_filter
+    pos_obs = np.asarray(pos_obs, dtype=np.float64)
+    T = len(pos_obs)
+    idx = np.arange(T - 1, RAMP_SKIP - 1, -step)[::-1]         # (4, 9, …, T-6, T-1) — 마지막 관측 포함
+    sm = np.empty_like(pos_obs)
+    sm[RAMP_SKIP:] = savgol_filter(pos_obs[RAMP_SKIP:], sg_window, sg_order, axis=0, mode="interp")
+    p = sm[idx]
+    dt_s = dt * step
+    m = mr.traj_to_motion(p, dt=dt_s, stop_ms=1.0, smooth=1)
+    a_ch = m.dv_kph / mr.DEFAULT_SCALES["dv_kph"]
+    h_ref = guard(np.asarray(head_obs, dtype=np.float64))[idx]  # 가드는 10 Hz 에서, 뽑기는 그다음
+    h_city, _ = build_heading(p, h_ref=h_ref, dt=dt_s, v_min=v_min, jump_deg=180.0)
+    h_n = wrap(h_city - float(yaw0))
+    return np.stack([a_ch, h_n], axis=1).astype(np.float32)
+
+
 # ------------------------------------------------------------------ 차로 방향각 k
 def lane_field(graph, near_xy=None, near_m=120.0, step=STEP_M):
     """모든 차로 중심선을 등간격 점으로 펴서 (점, 접선각, 교차로여부) 로 쌓는다.

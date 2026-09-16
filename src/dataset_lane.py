@@ -31,7 +31,7 @@ from av2.datasets.motion_forecasting import scenario_serialization
 
 from dataset_map import OBS_LEN, PRED_LEN, N_LANES, N_PTS, _resample, _rotation_matrix
 import lane_frame as lf
-from heading_decomp import ah_features, build_heading, wrap
+from heading_decomp import ah_features, ah_features_2hz, build_heading, wrap
 from lane_graph import LaneGraph, REACH_MARGIN_M
 
 import json
@@ -70,6 +70,8 @@ class Av2LaneRuleDataset(Dataset):
           "ah2"   (a, h) 2채널 — heading_decomp.ah_features. a 는 속도 증분(첫 값 v0),
                   h 는 h = k + θ 규약의 진행방향 자체(위치차분, 저속만 AV2 보조, wrap).
                   둘 다 관측 구간만 쓴다.
+          "ah2_2hz"  같은 (a, h) 를 관측 위치 평활(Savitzky–Golay 0.5초) 뒤 2 Hz 로 뽑아 만든다 —
+                  x 가 (10, 2). heading_decomp.ah_features_2hz. **입력만** 바뀌고 정답·경로·h0 는 그대로다.
 
         fallback 은 지도가 경로를 하나도 못 주는 시나리오(val 의 3.75%)를 무엇으로 채울지다.
         세 값이 **서로 다른 두 가지를 가른다** — 폴백 기하와 모드 예산:
@@ -89,10 +91,10 @@ class Av2LaneRuleDataset(Dataset):
         self.theta_ch, self.h_src = theta_ch, h_src
         self.routes, self.n_modes = routes, n_modes
         self.fallback = fallback
-        if input_repr not in ("raw5", "ah2"):
-            raise ValueError(f"input_repr 는 raw5 | ah2 다: {input_repr}")
-        if theta_ch and input_repr == "ah2":
-            raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 는 이미 h 를 담는다")
+        if input_repr not in ("raw5", "ah2", "ah2_2hz"):
+            raise ValueError(f"input_repr 는 raw5 | ah2 | ah2_2hz 다: {input_repr}")
+        if theta_ch and input_repr != "raw5":
+            raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 계열은 이미 h 를 담는다")
         self.input_repr = input_repr
         self.centerline, self.select = centerline, select
         self.dirs = []
@@ -128,10 +130,13 @@ class Av2LaneRuleDataset(Dataset):
         # 변수 이름을 h0 로 두면 안 된다 — 아래 규칙 블록의 h0 = (cos θ, sin θ) 가 덮어써서
         # out["h0"] 가 (2,) 로 나간다 (train 스모크에서 잡힘).
         h_last = 0.0
-        if self.input_repr == "ah2" or self.routes:
+        if self.input_repr != "raw5" or self.routes:
             feat_ah, h_last = ah_features(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
             if self.input_repr == "ah2":
                 x = feat_ah
+            elif self.input_repr == "ah2_2hz":
+                # h0(h_last) 는 위의 10 Hz 값을 그대로 쓴다 — 입력만 2 Hz 로 바꾸고 적분기 시작값은 건드리지 않는다
+                x = ah_features_2hz(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
         y = pos_n[OBS_LEN:]
 
         # --- 지도: 원본 JSON에서 직접 그래프를 만든다 ---

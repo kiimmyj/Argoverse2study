@@ -4,6 +4,7 @@
 #           --limit 0 은 '전체'가 아니라 0개로 처리되므로 개수를 적는다.
 #   설정    run_v4_ah2.sh 의 (a, h) 2판과 같다(θ₀ guard, straight1, 15에폭, lr 5e-4, batch 32, seed 0).
 #   벌점    --smooth w — 액션 (a, dθ) 의 스텝간 변화 제곱(train_v4.jitter). 0 이면 기존 손실 그대로.
+#           (지금은 L0 기본값이 1.0 이라 벌점 없는 두 판에는 --smooth 0 을 명시한다.)
 #
 # 다섯 판을 **차례로** 돌린다. 에폭 시간은 단독 실행·workers 고정으로 재야 비교가 되기 때문이다.
 # 에폭 시간은 runs/*.json 의 history[].sec (train + val 평가) 에 남는다. 한 판에 약 30분.
@@ -19,8 +20,8 @@ grep -q "모든 점검 통과" /data/argoverse2/cache/v4/prepare_l0_ah2_full.log
 C="--level l0 --input ah2 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
    --limit 199908 --val-limit 24988 --epochs 15 --lr 5e-4 --batch 32 --workers 8 --cache --outdir runs"
 L4="--offlane 1.0 --off-nonwinner 1"
-$PY -u src/train_v4.py $C                   --tag v4_l0_ah2_full_s0          > runs/v4_l0_ah2_full_s0.log          2>&1
-$PY -u src/train_v4.py $C $L4               --tag v4_l4nw_ah2_full_s0        > runs/v4_l4nw_ah2_full_s0.log        2>&1
+$PY -u src/train_v4.py $C     --smooth 0    --tag v4_l0_ah2_full_s0          > runs/v4_l0_ah2_full_s0.log          2>&1
+$PY -u src/train_v4.py $C $L4 --smooth 0    --tag v4_l4nw_ah2_full_s0        > runs/v4_l4nw_ah2_full_s0.log        2>&1
 $PY -u src/train_v4.py $C     --smooth 1.0  --tag v4_l0_ah2_full_sm1_s0      > runs/v4_l0_ah2_full_sm1_s0.log      2>&1
 $PY -u src/train_v4.py $C $L4 --smooth 1.0  --tag v4_l4nw_ah2_full_sm1_s0    > runs/v4_l4nw_ah2_full_sm1_s0.log    2>&1
 $PY -u src/train_v4.py $C     --smooth 0.1  --tag v4_l0_ah2_full_sm0.1_s0    > runs/v4_l0_ah2_full_sm0.1_s0.log    2>&1

@@ -263,8 +263,9 @@ def verify_data(args, cache_dir, split):
     log(f"[{split}] n={n:,}  필드 {len(meta['fields'])}개")
 
     s = ds[0]
-    exp_in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
-    check(tuple(s["x"].shape) == (50, exp_in_dim), f"x shape (50,{exp_in_dim})")
+    exp_in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
+    exp_T = 10 if args.input == "ah2_2hz" else 50          # 2 Hz 입력은 관측 50스텝을 10스텝으로 뽑는다
+    check(tuple(s["x"].shape) == (exp_T, exp_in_dim), f"x shape ({exp_T},{exp_in_dim})")
     check(tuple(s["y"].shape) == (60, 2), "y shape (60,2)")
     check(tuple(s["lanes"].shape) == (20, 10, 2), "lanes shape (20,10,2)")
 
@@ -334,7 +335,7 @@ def verify_model(args, cache_dir):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_rules = bool(args.rules)
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = (2 if args.input == "ah2" else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
+    in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
 
     for level in (("l2", "l3", "l0") if args.all_levels else (args.level,)):
         log(f"\n[{level}]  in_dim={in_dim} lane_in={lane_in}")
@@ -419,7 +420,7 @@ def main():
     # 아래 세 인자는 train_v4.py 의 같은 이름 인자와 기본값이 같아야 같은 데이터·모델이 된다.
     # --fallback · --input 은 캐시 키에 들어가므로 값마다 다른 캐시가 생긴다. --th0 는 모델 검증에만 쓴다.
     p.add_argument("--fallback", default="straight1", choices=("straight1", "straight6", "fan"))
-    p.add_argument("--input", default="raw5", choices=("raw5", "ah2"))
+    p.add_argument("--input", default="raw5", choices=("raw5", "ah2", "ah2_2hz"))
     p.add_argument("--th0", default="current", choices=("current", "guard"))
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--offlane", type=float, default=0.0)

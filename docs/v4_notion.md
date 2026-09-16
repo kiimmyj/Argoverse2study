@@ -207,9 +207,9 @@ route_point 는 학습 중 경로 끝에서 끊기던 gradient 를 살리므로,
 
 ```bash
 python src/train_v4.py --level l0 --input raw5 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --tag v4_l0_raw5g_s0
+    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth 0 --tag v4_l0_raw5g_s0
 python src/train_v4.py --level l0 --input raw5 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --offlane 1.0 --off-nonwinner 1 --tag v4_l4nw_raw5g_s0
+    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4nw_raw5g_s0
 ```
 
 캐시를 쓰려면 같은 인자로 `src/prepare_v4.py` 를 먼저 돌리고 학습 명령에 `--cache` 를 붙인다.
@@ -265,6 +265,10 @@ flowchart LR
 | 이웃 차이의 제곱 | 완만한 변화는 거의 공짜이고, 뒤집기는 크게 벌한다 |
 
 `--smooth 0` 이면 기존 코드와 loss·minADE6 가 소수 6자리까지 같다(검증) — 이전 결과는 그대로 재현된다.
+
+> **결정 (2026-09-16) — 흔들림 벌점은 L0 의 일부다.** 흔들림은 액션 출력이 만드는 문제라
+> **L0 = 액션 출력 + Frenet 적분기 + 흔들림 벌점**으로 정의한다. 그래서 `--level l0` 이면 `--smooth` 기본값이 1.0 이다
+> (L4 는 그 위에 이탈 hinge). 벌점 없이 학습한 예전 판을 재현하려면 `--smooth 0` 을 준다 — 9절 명령과 `run_v4*.sh` 에 넣어 두었다.
 
 **④ 결과** — val 24,988 · best 에폭 / 최근 5에폭 평균 · 시드 1개
 
@@ -555,8 +559,9 @@ python src/simulate_v4_lane.py --limit 300             # 경로 열거기 효과
 # --fallback 기본값은 straight1 이다 (b1db1a6 에서 되돌림). 아래 명령은 단계 1~4 수치를 재현한다.
 python src/train_v4.py --level l2 --theta 0 --tag v4_l2_s0
 python src/train_v4.py --level l3 --theta 0 --tag v4_l3b_s0
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 --tag v4_l0b_s0
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 --offlane 1.0 --off-nonwinner 1 --tag v4_l4_nw_s0
+# L0 기본에 흔들림 벌점(1.0)이 들어간 뒤(2026-09-16)로는 벌점 없는 판 재현에 --smooth 0 이 필요하다
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 --tag v4_l0b_s0
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4_nw_s0
 
 # (a, h) 2채널 입력 판 — L0·L4, θ₀ 가드 (사용자 결정으로 이 두 판만)
 bash run_v4_ah2.sh
@@ -565,6 +570,9 @@ python src/compare_v4_ah2.py 2000 8   # 네 체크포인트를 현재 코드로 
 # 전체 데이터 (a, h) + 흔들림 벌점 (2.5절) — 캐시(약 17분) 뒤 다섯 판을 차례로 (판당 약 30분)
 bash run_v4_full.sh
 python src/compare_v4_full.py         # 아홉 체크포인트를 같은 val 로 재채점 (2.5절 표, runs/v4_full_compare.json)
+
+# (a, h) 2 Hz 입력 판 — 입력만 평활 + 10 Hz → 2 Hz (--input ah2_2hz), L0·L4nw, 벌점 1.0
+bash run_v4_2hz.sh
 
 # 시각화
 python src/visualize_v4_modes.py --ckpt runs/lstm_v4_l0b_s0.pth --level l0 --out v4_modes.png

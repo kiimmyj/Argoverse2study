@@ -13,8 +13,9 @@
 # 다른 실행과 벽시계를 비교하려면 이 조건을 맞춰야 한다.
 cd /home/user/Argoverse2study
 PY=/home/user/miniforge3/envs/av2/bin/python
+# --smooth 0 — 2026-09-16 부터 L0 기본에 흔들림 벌점(1.0)이 들어가므로, 벌점 없이 학습한 이 판들을 재현하려면 끈다.
 C="--level l0 --input ah2 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-   --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --workers 20 --outdir runs"
+   --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --workers 20 --outdir runs --smooth 0"
 $PY src/train_v4.py $C                                  --tag v4_l0_ah2_s0   > runs/v4_l0_ah2_s0.log   2>&1 &
 $PY src/train_v4.py $C --offlane 1.0 --off-nonwinner 1  --tag v4_l4nw_ah2_s0 > runs/v4_l4nw_ah2_s0.log 2>&1 &
 wait

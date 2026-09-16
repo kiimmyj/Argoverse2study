@@ -156,8 +156,9 @@ L4 = mean_t  max(0, d_t − band_left) + max(0, −d_t − band_right)
 > 1개)로 학습한 것이다. 현재 기본값은 `fan` 이라 플래그 없이 치면 다른 모델이 나온다.
 
 ```bash
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 --tag v4_l0b_s0   # L0
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 \
+# --smooth 0: 2026-09-16 부터 L0 기본에 흔들림 벌점이 들어가므로, 이 표의 판(벌점 없음)을 재현하려면 끈다
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 --tag v4_l0b_s0   # L0
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 \
     --offlane 1.0 --off-nonwinner 1 --tag v4_l4_nw_s0                             # L4
 python src/visualize_v4_modes.py --ckpt runs/lstm_v4_l4_nw_s0.pth --level l0 --out v4_modes.png
 ```
