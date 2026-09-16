@@ -22,7 +22,12 @@ if str(SRC) not in sys.path:
 
 DATA_ROOT = Path("/data/argoverse2/motion_forecasting")
 VAL_DIR = DATA_ROOT / "val"
-VAL_CACHE = Path("/data/argoverse2/cache/v4/val_e67373005962be8a_n24988")
+# 입력 형태별 val 캐시 (compare_v4_full.VAL_CACHE 와 같은 경로). 키가 아니라 경로로 고정한다 —
+# 캐시 키는 소스 파일 전체 해시라 주석만 고쳐도 바뀐다. 두 캐시는 x 만 다르고 나머지 18개 필드는
+# 비트 단위로 같다(2026-09-17 전수 대조) — 그래서 원본 파생량·상황 분류는 어느 캐시로 만들어도 같다.
+VAL_CACHES = {"ah2": Path("/data/argoverse2/cache/v4/val_e67373005962be8a_n24988"),       # x (50, 2)
+              "ah2_2hz": Path("/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988")}   # x (10, 2)
+VAL_CACHE = VAL_CACHES["ah2"]          # 주 모델(ah2) 기본값 — 다른 입력은 val_cache_for() 로 고른다
 RUNS = ROOT / "runs"
 VIZ_ROOT = ROOT / "viz" / "v4"
 DEFAULT_TAG = "v4_l4nw_ah2_full_sm1_s0"
@@ -93,6 +98,26 @@ C_GT = INK
 C_PAST = "#8f8d87"
 C_LEAD = C_VIOLET
 C_BAND = C_AQUA
+# 상황별 고정 색 (범주 8색을 순서대로, '기타' 는 회색). 에폭 곡선은 한 칸에 인접 슬롯 2~3개만 함께 그린다
+# (회전 1·2 / 차선변경 3·4 / 정지·급감속·급가속 5·6·7 / 정속·기타 8·회색). dataviz 검증기로 8색 인접 쌍 통과,
+# 5·6·7 은 모든 쌍 통과. 청록·노랑·분홍은 밝은 면 대비 3:1 미만이라 선 끝에 직접 라벨을 단다.
+CLASS_COLOR = {"좌회전": C_BLUE, "우회전": C_ORANGE, "좌차선변경": C_AQUA, "우차선변경": C_YELLOW,
+               "정지": C_MAGENTA, "급감속": C_GREEN, "급가속": C_VIOLET, "정속": C_RED, "기타": MUTED}
+# 에폭 순서색 (파랑 순서 램프 300·400·500·600·700 — 검증기 --ordinal 통과). 지도 위에서는 흰 테두리를 두른다.
+EPOCH_RAMP = ["#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+
+
+def epoch_colors(epochs):
+    """에폭 목록 -> 색. 5개 이하면 EPOCH_RAMP 에서 양 끝을 포함해 고르게, 더 많으면 파랑 램프에서 고르게."""
+    epochs = list(epochs)
+    n = len(epochs)
+    if n <= len(EPOCH_RAMP):
+        m = len(EPOCH_RAMP) - 1
+        cols = [EPOCH_RAMP[int(round(j * m / max(n - 1, 1)))] for j in range(n)] if n > 1 else [EPOCH_RAMP[-1]]
+    else:
+        ramp = BLUE_RAMP[3:]
+        cols = [ramp[int(round(j * (len(ramp) - 1) / max(n - 1, 1)))] for j in range(n)]
+    return dict(zip(epochs, cols))
 
 
 def setup_mpl():
@@ -136,12 +161,131 @@ def savefig(fig, path, dpi=140):
 def tag_dirs(tag):
     base = VIZ_ROOT / tag
     return {"base": base, "data": base / "data", "cases": base / "cases",
-            "stats": base / "stats", "why": base / "why", "div": base / "diversity"}
+            "stats": base / "stats", "why": base / "why", "div": base / "diversity",
+            "epochs": base / "epochs"}
 
 
 def run_args(tag):
     d = json.loads((RUNS / f"{tag}.json").read_text())
     return d["args"], d
+
+
+def val_cache_for(inp):
+    """학습 입력(--input) -> val 캐시 경로. 캐시 meta 의 input_repr 도 확인한다."""
+    if inp not in VAL_CACHES:
+        raise SystemExit(f"입력 {inp!r} 의 val 캐시가 없다 (VAL_CACHES: {sorted(VAL_CACHES)})")
+    p = VAL_CACHES[inp]
+    got = json.loads((p / "meta.json").read_text())["dataset_kwargs"].get("input_repr")
+    if got != inp:
+        raise SystemExit(f"캐시 {p} 의 input_repr {got!r} ≠ {inp!r}")
+    return p
+
+
+# train_v4.py 의 argparse 기본값 (학습 중이라 runs/<tag>.json 이 아직 없을 때 로그의 cmd 줄을 읽는 데만 쓴다).
+# train_v4 는 파서를 main() 안에서 만들어 가져올 수 없다 — 옵션이 바뀌면 여기도 맞춘다.
+TRAIN_DEFAULTS = {"level": "l3", "offlane": 0.0, "off_nonwinner": 0, "rules": 1, "theta": 1, "h_src": "build",
+                  "fallback": "straight1", "limit": 50000, "val_limit": 2000, "epochs": 15, "batch": 32,
+                  "lr": 5e-4, "workers": 24, "seed": 0, "input": "raw5", "th0": "current", "smooth": None,
+                  "tag": "", "save_every": 1}
+
+
+def parse_train_cmd(argstr):
+    import argparse
+    import shlex
+    ap = argparse.ArgumentParser(add_help=False)
+    for k, v in TRAIN_DEFAULTS.items():
+        typ = type(v) if v is not None else float
+        ap.add_argument("--" + k.replace("_", "-"), dest=k, type=typ, default=v)
+    ns, _ = ap.parse_known_args(shlex.split(argstr))
+    d = vars(ns)
+    if d["smooth"] is None:
+        d["smooth"] = 1.0 if d["level"] == "l0" else 0.0      # train_v4 의 L0 기본값 규칙
+    return d
+
+
+def run_config(tag, override=None):
+    """학습 설정 (args dict, 출처). runs/<tag>.json > 로그 cmd 줄 > 기본값 순. override 는 json 이 없을 때만 덮는다."""
+    override = {k: v for k, v in (override or {}).items() if v is not None}
+    j = RUNS / f"{tag}.json"
+    if j.exists():
+        args = dict(json.loads(j.read_text())["args"])
+        bad = {k: (v, args.get(k)) for k, v in override.items() if args.get(k) != v}
+        if bad:
+            print(f"[config] json 이 있어 명령줄 값을 무시한다: {bad}", flush=True)
+        return args, "json"
+    args, src = dict(TRAIN_DEFAULTS), "기본값"
+    log = RUNS / f"{tag}.log"
+    if log.exists():
+        for line in log.read_text(errors="replace").splitlines()[:30]:
+            if line.startswith("cmd:") and "train_v4.py" in line:
+                args, src = parse_train_cmd(line.split("train_v4.py", 1)[1]), "로그 cmd"
+                break
+    if override:
+        args.update(override)
+        src += " + 명령줄"
+    return args, src
+
+
+_LOG_RE = None
+
+
+def run_history(tag):
+    """학습 history (list, 출처). json 이 없으면 로그의 에폭 줄을 읽는다(값은 로그 반올림 자리까지)."""
+    global _LOG_RE
+    import re
+    j = RUNS / f"{tag}.json"
+    if j.exists():
+        return json.loads(j.read_text())["history"], "json"
+    log = RUNS / f"{tag}.log"
+    if not log.exists():
+        return [], None
+    if _LOG_RE is None:
+        _LOG_RE = re.compile(
+            r"\[(?P<tag>[^\]]+)\] (?P<ep>\d+)/(?P<n>\d+) loss (?P<loss>[-\d.]+) \| minADE6 (?P<ade>[\d.]+) \| "
+            r"minFDE6 (?P<fde>[\d.]+) \| 이탈 (?P<off>[\d.]+) \| dθ p99 (?P<p99>[\d.]+)° \| "
+            r"[\d.]+°초과 (?P<exc>[\d.]+)% \| 흔들림 (?P<jit>[\d.]+) \| (?P<sec>\d+)s")
+    hist = []
+    for line in log.read_text(errors="replace").splitlines():
+        m = _LOG_RE.search(line)
+        if m and m["tag"] == tag:
+            hist.append({"epoch": int(m["ep"]), "loss": float(m["loss"]), "minADE6": float(m["ade"]),
+                         "minFDE6": float(m["fde"]), "val_offlane_steps": float(m["off"]),
+                         "dtheta_p99_deg": float(m["p99"]), "val_dtheta_over_label_pct": float(m["exc"]),
+                         "val_jitter": float(m["jit"]), "sec": float(m["sec"])})
+    return hist, "로그"
+
+
+def epoch_ckpts(tag, min_age_s=10.0):
+    """runs/ckpt/<tag>/epNN.pth -> {에폭: 경로}. 방금 쓰는 중일 수 있는 파일(min_age_s 안에 바뀐 것)은 뺀다."""
+    import time
+    d = RUNS / "ckpt" / tag
+    out = {}
+    for p in sorted(d.glob("ep*.pth")):
+        try:
+            e = int(p.stem[2:])
+        except ValueError:
+            continue
+        if time.time() - p.stat().st_mtime >= min_age_s:
+            out[e] = p
+    return dict(sorted(out.items()))
+
+
+def build_model(sd, th0, device):
+    """state_dict -> 평가 모드 V4Net (compare_v4_full.py 와 같은 방식: 입력·차선 차원은 가중치에서 읽는다)."""
+    from model_v4 import V4Net
+    in_dim = sd["traj_encoder.weight_ih_l0"].shape[1]
+    lane_in = sd["lane_encoder.0.weight"].shape[1]
+    m = V4Net(in_dim=in_dim, lane_in=lane_in, level="l0", th0_mode=th0).to(device)
+    m.load_state_dict(sd)
+    m.eval()
+    return m, int(in_dim), int(lane_in)
+
+
+def model_info(args, in_dim, lane_in):
+    return {"in_dim": int(in_dim), "lane_in": int(lane_in), "th0": args.get("th0", "current"),
+            "offlane": float(args.get("offlane", 0.0)), "off_nonwinner": bool(args.get("off_nonwinner", 0)),
+            "smooth": float(args.get("smooth", 0.0)), "input": args.get("input", "raw5"),
+            "fallback": args.get("fallback"), "train_n": args.get("limit")}
 
 
 def training_running():
@@ -163,20 +307,10 @@ def pick_device(want="auto"):
 def load_model(tag, device):
     """runs/<tag>.json 의 args 와 체크포인트에서 V4Net 을 복원한다 (compare_v4_full.py 와 같은 방식)."""
     import torch
-    from model_v4 import V4Net
     args, meta = run_args(tag)
     sd = torch.load(RUNS / f"lstm_{tag}.pth", map_location="cpu")
-    in_dim = sd["traj_encoder.weight_ih_l0"].shape[1]
-    lane_in = sd["lane_encoder.0.weight"].shape[1]
-    th0 = args.get("th0", "current")
-    m = V4Net(in_dim=in_dim, lane_in=lane_in, level="l0", th0_mode=th0).to(device)
-    m.load_state_dict(sd)
-    m.eval()
-    info = {"in_dim": int(in_dim), "lane_in": int(lane_in), "th0": th0,
-            "offlane": float(args.get("offlane", 0.0)), "off_nonwinner": bool(args.get("off_nonwinner", 0)),
-            "smooth": float(args.get("smooth", 0.0)), "input": args.get("input", "raw5"),
-            "fallback": args.get("fallback"), "train_n": args.get("limit")}
-    return m, info
+    m, in_dim, lane_in = build_model(sd, args.get("th0", "current"), device)
+    return m, model_info(args, in_dim, lane_in)
 
 
 def expected_scores(tag):

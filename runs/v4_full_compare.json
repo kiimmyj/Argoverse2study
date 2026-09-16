@@ -1,5 +1,8 @@
 {
-  "val_cache": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
+  "val_cache": {
+    "ah2": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
+    "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988"
+  },
   "label_dtheta_deg": 7.3,
   "runs": {
     "v4_l0b_s0": {
@@ -289,7 +292,75 @@
         "jitter_theta": 0.0012561974098630555,
         "jitter_a": 0.002633740129716869
       }
+    },
+    "v4_l0_ah2_2hz_full_sm1_s0": {
+      "name": "L0 전체·벌점1·2Hz",
+      "input": "ah2_2hz",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 0.0,
+      "best_epoch": 5,
+      "logged_best": [
+        1.6101287184132562,
+        3.838455155923574
+      ],
+      "epoch_sec_median": 127.9595742225647,
+      "total_min": 32.11648102204005,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.617954210281372,
+        "minFDE6": 3.8468735275268555,
+        "offlane": 1.5596166666666667,
+        "dtheta_over_label_pct": 0.0,
+        "jitter_theta": 0.0003194804708662636,
+        "jitter_a": 0.0007078400089242364
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.6101287184132562,
+        "minFDE6": 3.838455155923574,
+        "offlane": 1.5389553652419847,
+        "dtheta_over_label_pct": 0.0,
+        "jitter_theta": 0.00032562961539488693,
+        "jitter_a": 0.0007098060210085529
+      }
+    },
+    "v4_l4nw_ah2_2hz_full_sm1_s0": {
+      "name": "L4 전체·벌점1·2Hz",
+      "input": "ah2_2hz",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 1.0,
+      "best_epoch": 13,
+      "logged_best": [
+        1.643473202922315,
+        3.878812358191209
+      ],
+      "epoch_sec_median": 134.7074408531189,
+      "total_min": 33.703873252868654,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.6523587856292725,
+        "minFDE6": 3.853050724029541,
+        "offlane": 0.6762166666666667,
+        "dtheta_over_label_pct": 1.4158556588299618,
+        "jitter_theta": 0.0012075507148532718,
+        "jitter_a": 0.002266709693559689
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.643473202922315,
+        "minFDE6": 3.878812358191209,
+        "offlane": 0.665503441651993,
+        "dtheta_over_label_pct": 1.4236503755221033,
+        "jitter_theta": 0.0012084765271939716,
+        "jitter_a": 0.0022555404408257825
+      }
     }
   },
-  "sec": 102.4134361743927
+  "sec": 118.06924939155579
 }

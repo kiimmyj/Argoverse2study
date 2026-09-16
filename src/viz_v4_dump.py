@@ -29,7 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import viz_v4_common as C
 
 # --------------------------------------------------------------------------- 1. 추론
-def run_inference(tag, device, batch, workers, limit=None):
+def run_inference(tag, device, batch, workers, limit=None, model=None, info=None, cache_dir=None):
+    """model 을 주지 않으면 best 체크포인트(runs/lstm_<tag>.pth)를 연다. 에폭별 분석은 model·info 를 넘긴다.
+    cache_dir 를 주지 않으면 그 판의 입력(info['input'])에 맞는 val 캐시를 쓴다 — 10 Hz 캐시를 2 Hz 모델에
+    넣어도 LSTM 은 길이를 가리지 않아 오류 없이 틀린 값이 나오기 때문이다."""
     import torch
     import torch.nn.functional as F
     from torch.utils.data import DataLoader
@@ -37,10 +40,11 @@ def run_inference(tag, device, batch, workers, limit=None):
     from model_v4 import A_SCALE, DTHETA_MAX
     from train_v4 import to_dev, loss_fn, jitter, jitter_steps
 
-    model, info = C.load_model(tag, device)
+    if model is None:
+        model, info = C.load_model(tag, device)
     # 손실 가중치는 그 판의 학습 인자를 따른다 (주 모델: offlane 1.0 · 버려진 모드만 · smooth 1.0)
     w_off, w_sm, nonwin_only = info["offlane"], info["smooth"], info["off_nonwinner"]
-    ds = CachedV4Dataset(C.VAL_CACHE, limit=limit)
+    ds = CachedV4Dataset(cache_dir if cache_dir is not None else C.val_cache_for(info["input"]), limit=limit)
     N, K, T = len(ds), 6, C.FUT
     f32 = np.float32
     P = {k: np.zeros((N, K, T, 2), f32) for k in ("traj", "band")}
@@ -145,9 +149,10 @@ def score_like_compare(P, S):
 _W = {}
 
 
-def _init_worker():
+def _init_worker(cache_dir=None):
+    # 여기서 읽는 필드(경로·정답·원점)는 두 val 캐시에서 같다. 그래도 추론과 같은 캐시를 받는다.
     from dataset_cached import CachedV4Dataset
-    ds = CachedV4Dataset(C.VAL_CACHE)
+    ds = CachedV4Dataset(cache_dir or C.VAL_CACHE)
     for k in ("routes", "route_tan", "route_band", "route_len", "y", "origin", "theta", "n_distinct",
               "route_fallback"):
         _W[k] = ds.raw(k)
@@ -468,7 +473,7 @@ def main():
     t1 = time.time()
     tasks = [(i, sids[i], int(S["winner"][i])) for i in range(N)]
     rows, arrs = [None] * N, [None] * N
-    with Pool(a.workers, initializer=_init_worker) as pool:
+    with Pool(a.workers, initializer=_init_worker, initargs=(str(ds.dir),)) as pool:
         for k, (row, arr) in enumerate(pool.imap(raw_one, tasks, chunksize=16)):
             rows[k], arrs[k] = row, arr
             if (k + 1) % 5000 == 0:
@@ -504,7 +509,7 @@ def main():
     np.savez(out / "raw.npz", sids=np.array(sids), y=np.asarray(cache_raw["y"]), **R)
     cls_counts = df["cls"].value_counts().reindex(C.CLASSES).fillna(0).astype(int).to_dict()
     meta = {
-        "tag": a.tag, "model": info, "device": device, "val_cache": str(C.VAL_CACHE), "n": N,
+        "tag": a.tag, "model": info, "device": device, "val_cache": str(ds.dir), "n": N,
         "git_head": C.git_head(), "seed": C.SEED, "repro": repro,
         "loss_weights": {"offlane": info["offlane"], "smooth": info["smooth"],
                          "hinge": "버려진 모드만" if info["off_nonwinner"] else "살아있는 모든 모드"},

@@ -61,7 +61,7 @@ class Ctx:
                                             "hinge", "jit", "alive")}
         self.R = {k: self.raw[k] for k in ("pos", "v_pos", "v_fld", "a_fld", "h", "lead_dist",
                                            "lead_track", "gt_d_w", "gt_band_w", "gt_k_w")}
-        ds = CachedV4Dataset(C.VAL_CACHE)
+        ds = CachedV4Dataset(self.meta.get("val_cache", C.VAL_CACHE))   # 덤프가 쓴 캐시 (경로 필드는 두 캐시가 같다)
         self.cache = {k: ds.raw(k) for k in ("routes", "route_tan", "route_band", "route_len",
                                              "route_mask", "origin", "theta")}
         self._scene = {}

@@ -9,3 +9,8 @@ wandb/
 animation/output/
 runs/*.log
 runs/*.npz
+
+# 노션 문서에 넣는 그림은 저장소에 남긴다 (viz/ 원본은 계속 무시)
+!docs/figures/**/*.png
+# Claude Code 작업 트리 사본은 올리지 않는다
+.claude/worktrees/

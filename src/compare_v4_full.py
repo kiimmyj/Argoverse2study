@@ -4,6 +4,7 @@
   50k       v4_l0_ah2_s0 / v4_l4nw_ah2_s0                   train 50,000 · best 는 val 2,000 에서 고름
   전체      v4_l0_ah2_full_s0 / v4_l4nw_ah2_full_s0           train 199,908 · best 는 val 24,988 에서 고름
   벌점 1.0  v4_l0_ah2_full_sm1_s0 / v4_l4nw_ah2_full_sm1_s0   전체 + train_v4 --smooth 1.0
+  2 Hz      v4_l0_ah2_2hz_full_sm1_s0 / v4_l4nw_ah2_2hz_full_sm1_s0   벌점 1.0 판과 입력만 다름(--input ah2_2hz)
   벌점 0.1  v4_l0_ah2_full_sm0.1_s0                          전체 + --smooth 0.1
   5채널     v4_l0b_s0 / v4_l4_nw_s0                          참고용. 50k · 옛 기하로 학습, val 2,000 만(원본에서 즉석 전처리)
 각 판은 자기 val 에서 best 에폭을 골랐으므로 자기 집합 점수가 조금 낙관적이다. 그래서 두 집합을 모두 보인다.
@@ -34,7 +35,10 @@ from train_v4 import to_dev, LABEL_DTHETA_DEG
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
-VAL_CACHE = "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988"
+# 입력 형태별 val 캐시. 키가 아니라 경로로 고정한다 — 캐시 키는 소스 파일 전체 해시라 주석만 고쳐도 바뀐다.
+# 두 캐시 모두 2026-09-17 코드(a8df67b)의 원본 전처리와 48개 대조를 통과했다.
+VAL_CACHE = {"ah2": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
+             "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988"}
 OUT = f"{ROOT}/runs/v4_full_compare.json"
 RUNS = [
     ("v4_l0b_s0", "L0 5채널 50k"),
@@ -46,6 +50,8 @@ RUNS = [
     ("v4_l4nw_ah2_s0", "L4 50k"),
     ("v4_l4nw_ah2_full_s0", "L4 전체"),
     ("v4_l4nw_ah2_full_sm1_s0", "L4 전체·벌점1"),
+    ("v4_l0_ah2_2hz_full_sm1_s0", "L0 전체·벌점1·2Hz"),
+    ("v4_l4nw_ah2_2hz_full_sm1_s0", "L4 전체·벌점1·2Hz"),
 ]
 
 
@@ -93,22 +99,22 @@ def main():
         h = d["history"]
         sd = torch.load(cpath, map_location="cpu")
         in_dim = sd["traj_encoder.weight_ih_l0"].shape[1]
-        ah2 = in_dim == 2
+        inp = a.get("input", "raw5")          # 5채널 옛 판은 args 에 input 이 없다
         th0 = a.get("th0", "current")
         m = V4Net(in_dim=in_dim, lane_in=30, level="l0", th0_mode=th0).cuda()
         m.load_state_dict(sd)
         m.eval()
         best = min(h, key=lambda x: x["minADE6"])
-        r = {"name": name, "input": "ah2" if ah2 else "raw5", "th0": th0,
+        r = {"name": name, "input": inp, "th0": th0,
              "train_n": a["limit"], "val_n_selected": a["val_limit"],
              "smooth": a.get("smooth", 0.0), "offlane": a.get("offlane", 0.0),
              "best_epoch": best["epoch"], "logged_best": [d["best_minADE6"], d["best_minFDE6"]],
              "epoch_sec_median": st.median(x["sec"] for x in h),
              "total_min": sum(x["sec"] for x in h) / 60.0}
         t0 = time.time()
-        if ah2:
-            r["val2000"] = score(m, CachedV4Dataset(VAL_CACHE, limit=2000), 2)
-            r["val24988"] = score(m, CachedV4Dataset(VAL_CACHE), 2)
+        if inp in VAL_CACHE:
+            r["val2000"] = score(m, CachedV4Dataset(VAL_CACHE[inp], limit=2000), 2)
+            r["val24988"] = score(m, CachedV4Dataset(VAL_CACHE[inp]), 2)
         else:
             ds = Av2LaneRuleDataset(DATA_ROOT, "val", 2000, with_rules=True, routes=True,
                                     fallback="straight1", input_repr="raw5")

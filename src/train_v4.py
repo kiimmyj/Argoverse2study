@@ -164,6 +164,9 @@ def main():
                     help="흔들림 벌점 가중치 — 액션 (a, dθ) 의 스텝간 변화 제곱 (jitter). "
                          "주지 않으면 level l0 은 1.0(L0 의 일부), 그 밖은 0. 0 이면 기존 손실 그대로")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--save-every", dest="save_every", type=int, default=1,
+                    help="N 에폭마다 체크포인트를 <outdir>/ckpt/<tag>/epNN.pth 로 남긴다 — 에폭별 시각화"
+                         "(모델이 어느 방향으로 학습되는지)에 쓴다. 0 이면 끈다. best 는 따로 lstm_<tag>.pth")
     ap.add_argument("--cache", action="store_true",
                     help="prepare_v4.py 가 구운 전처리 캐시로 학습한다 (원본과 bit-exact, 에폭마다 하던 전처리가 사라진다)")
     ap.add_argument("--cache-root", dest="cache_root", default=CACHE_ROOT)
@@ -245,6 +248,11 @@ def main():
         if ade < best[0]:
             best = (ade, fde)
             torch.save(model.state_dict(), f"{args.outdir}/lstm_{tag}.pth")
+        if args.save_every and (epoch % args.save_every == 0 or epoch == args.epochs):
+            # 저장은 학습 수치(RNG·가중치)를 건드리지 않는다. 판당 1.8 MB × 에폭 수
+            ck = f"{args.outdir}/ckpt/{tag}"
+            os.makedirs(ck, exist_ok=True)
+            torch.save(model.state_dict(), f"{ck}/ep{epoch:02d}.pth")
         print(f"[{tag}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | minADE6 {ade:.3f} | "
               f"minFDE6 {fde:.3f} | 이탈 {ooff:.2f} | dθ p99 {dth99:.1f}° | "
               f"{LABEL_DTHETA_DEG:g}°초과 {feas['dtheta_over_label_pct']:.2f}% | "
