@@ -838,6 +838,11 @@ L4 = mean_t  max(0, d_t − band_left) + max(0, −d_t − band_right)
 - **정답 끝 0.5초의 인공 감속**(AV2 위치 라벨의 창 가장자리 효과)을 모델이 배운다. 라벨을 그대로 둘지(공식 평가와 같은 라벨) 보정할지 정하지 않았다.
 - **에폭별 체크포인트는 2 Hz L4 판부터 있다**(`train_v4 --save-every`, 기본 1). 그 전 판들은 best 만 있어 에폭별 시각화를 못 한다.
 - **나중으로 미룬 것** — φ(= θ) 입력 학습, 회전 시나리오의 에폭별 비교(φ 판에서).
+- **주변 차량 heading 캐시는 만들었지만 아직 모델에 쓰지 않는다** (2026-09-17, `src/prep_agents_heading.py`).
+  - 무엇: t = 0 에 관측되는 차량·버스·이륜차 중 가까운 32대의 과거 5초 h(focal 프레임)와 출처 코드, t = 0 위치·거리·종류. 미래는 읽지 않는다.
+  - 규모: train+val 224,896 시나리오 1.8 GB, 40 workers 로 5분.
+  - 모델 캐시와 인덱스가 같다. 시나리오당 평균 19.7대이고, 14.5% 는 32대에서 잘린다.
+  - 관측 스텝의 48% 가 AV2 heading 보조다(주차·정지 차량). 움직인 적 없는 차량은 방향의 180° 뒤집힘을 검증할 수 없다.
 
 ---
 
@@ -875,6 +880,9 @@ python src/viz_v4_dump.py   --tag v4_l4nw_ah2_full_sm1_s0     # 추론 덤프 + 
 python src/viz_v4_cases.py  --tag v4_l4nw_ah2_full_sm1_s0     # 대표 시나리오 (2.8절)
 python src/viz_v4_stats.py  --tag v4_l4nw_ah2_full_sm1_s0     # 상황·조건별 · 손실 · 다양성 (2.8절)
 python src/viz_v4_epochs.py --tag v4_l4nw_ah2_2hz_full_sm1_s0 --device cuda   # 에폭별 학습 방향 (runs/ckpt/<tag>/epNN.pth 필요)
+# 주변 차량 과거 heading 캐시 (모델 입력용, 미래 안 읽음) — 인과성·focal 규칙 재현 확인 후 굽기
+python src/prep_agents_heading.py --split val --limit 64 --check
+python src/prep_agents_heading.py --split val --workers 40 && python src/prep_agents_heading.py --split train --workers 40
 python src/viz_v4_gallery.py --tag v4_l4nw_ah2_full_sm1_s0 --rule both --compare v4_l4nw_ah2_2hz_full_sm1_s0   # 평균 사례 궤적 (2.10절)
 python src/viz_v4_dump.py    --tag v4_l4nw_ah2_2hz_full_sm1_s0 && python src/viz_v4_gallery.py --tag v4_l4nw_ah2_2hz_full_sm1_s0 --rule both
 
