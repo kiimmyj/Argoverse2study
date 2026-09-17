@@ -152,6 +152,10 @@ def main():
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--lr-sched", dest="lr_sched", default="const", choices=["const", "cosine"],
+                    help="학습률 스케줄. const = 끝까지 --lr 고정(기존). cosine = 스텝마다 코사인으로 --lr-min 까지 낮춘다 "
+                         "— 고정 학습률로는 에폭 사이 val 요동이 남아 수렴한 가중치를 못 얻는다")
+    ap.add_argument("--lr-min", dest="lr_min", type=float, default=1e-5)
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
@@ -176,7 +180,8 @@ def main():
 
     use_rules = bool(args.rules)
     tag = args.tag or f"v4_{args.level}" + (f"_off{args.offlane:g}" if args.offlane else "") \
-        + (f"_sm{args.smooth:g}" if args.smooth else "") + f"_s{args.seed}"
+        + (f"_sm{args.smooth:g}" if args.smooth else "") \
+        + (f"_{args.lr_sched}{args.epochs}" if args.lr_sched != "const" else "") + f"_s{args.seed}"
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.outdir, exist_ok=True)
@@ -219,6 +224,10 @@ def main():
           f"| params {npar:,} | train {len(tr)} val {len(va)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    sched = None
+    if args.lr_sched == "cosine":      # 스텝 단위. const 면 스케줄러를 만들지 않아 기존과 수치가 같다
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.epochs * len(tl), eta_min=args.lr_min)
     hist, best = [], (1e9, 1e9)
     for epoch in range(1, args.epochs + 1):
         model.train(); t0 = time.time(); run = seen = 0.0; roff = 0.0; rsm = 0.0
@@ -236,6 +245,8 @@ def main():
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step()
+            if sched is not None:
+                sched.step()
             run += loss.item() * y.size(0); roff += float(off) * y.size(0); seen += y.size(0)
         ade, fde, ooff, (dth50, dth99), feas = evaluate(model, vl, device, args.level, use_rules)
         hist.append({"epoch": epoch, "loss": run / seen, "offlane": roff / seen,
@@ -244,6 +255,7 @@ def main():
                      "dtheta_p50_deg": dth50, "dtheta_p99_deg": dth99,
                      "val_dtheta_over_label_pct": feas["dtheta_over_label_pct"],
                      "val_jitter": feas["jitter"],
+                     "lr": opt.param_groups[0]["lr"],
                      "sec": time.time() - t0})
         if ade < best[0]:
             best = (ade, fde)
@@ -256,7 +268,7 @@ def main():
         print(f"[{tag}] {epoch:02d}/{args.epochs} loss {run/seen:.4f} | minADE6 {ade:.3f} | "
               f"minFDE6 {fde:.3f} | 이탈 {ooff:.2f} | dθ p99 {dth99:.1f}° | "
               f"{LABEL_DTHETA_DEG:g}°초과 {feas['dtheta_over_label_pct']:.2f}% | "
-              f"흔들림 {feas['jitter']:.3f} | {time.time()-t0:.0f}s", flush=True)
+              f"흔들림 {feas['jitter']:.3f} | lr {opt.param_groups[0]['lr']:.1e} | {time.time()-t0:.0f}s", flush=True)
 
     json.dump({"tag": tag, "level": args.level, "offlane": args.offlane,
                "off_nonwinner": bool(args.off_nonwinner),
