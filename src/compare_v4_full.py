@@ -52,6 +52,11 @@ RUNS = [
     ("v4_l4nw_ah2_full_sm1_s0", "L4 전체·벌점1"),
     ("v4_l0_ah2_2hz_full_sm1_s0", "L0 전체·벌점1·2Hz"),
     ("v4_l4nw_ah2_2hz_full_sm1_s0", "L4 전체·벌점1·2Hz"),
+    # 30에폭 코사인 학습률 (2026-09-17, 10 Hz·2 Hz 병렬 실행). "@epNN" 은 best 대신 그 에폭 체크포인트
+    ("v4_l4nw_ah2_full_sm1_cos30_s0", "L4 10Hz·cos30 best"),
+    ("v4_l4nw_ah2_full_sm1_cos30_s0@ep30", "L4 10Hz·cos30 ep30"),
+    ("v4_l4nw_ah2_2hz_full_sm1_cos30_s0", "L4 2Hz·cos30 best"),
+    ("v4_l4nw_ah2_2hz_full_sm1_cos30_s0@ep30", "L4 2Hz·cos30 ep30"),
 ]
 
 
@@ -89,8 +94,10 @@ def score(model, ds, workers):
 def main():
     t_all = time.time()
     res = {}
-    for tag, name in RUNS:
-        jpath, cpath = f"{ROOT}/runs/{tag}.json", f"{ROOT}/runs/lstm_{tag}.pth"
+    for key, name in RUNS:
+        tag, _, ep = key.partition("@")
+        jpath = f"{ROOT}/runs/{tag}.json"
+        cpath = f"{ROOT}/runs/ckpt/{tag}/{ep}.pth" if ep else f"{ROOT}/runs/lstm_{tag}.pth"
         if not (os.path.exists(jpath) and os.path.exists(cpath)):
             print(f"[skip] {tag} — 결과 파일 없음")
             continue
@@ -105,10 +112,14 @@ def main():
         m.load_state_dict(sd)
         m.eval()
         best = min(h, key=lambda x: x["minADE6"])
+        if ep:                                   # 지정한 에폭을 "best" 칸에 적는다
+            best = h[int(ep[2:]) - 1]
         r = {"name": name, "input": inp, "th0": th0,
              "train_n": a["limit"], "val_n_selected": a["val_limit"],
              "smooth": a.get("smooth", 0.0), "offlane": a.get("offlane", 0.0),
-             "best_epoch": best["epoch"], "logged_best": [d["best_minADE6"], d["best_minFDE6"]],
+             "best_epoch": best["epoch"], "checkpoint": cpath.replace(ROOT + "/", ""),
+             "logged_best": [best["minADE6"], best["minFDE6"]] if ep else [d["best_minADE6"], d["best_minFDE6"]],
+             "lr_sched": a.get("lr_sched", "const"), "epochs": a.get("epochs"),
              "epoch_sec_median": st.median(x["sec"] for x in h),
              "total_min": sum(x["sec"] for x in h) / 60.0}
         t0 = time.time()
@@ -119,8 +130,8 @@ def main():
             ds = Av2LaneRuleDataset(DATA_ROOT, "val", 2000, with_rules=True, routes=True,
                                     fallback="straight1", input_repr="raw5")
             r["val2000"] = score(m, ds, 8)
-        print(f"[{tag}] {time.time() - t0:.0f}s", flush=True)
-        res[tag] = r
+        print(f"[{key}] {time.time() - t0:.0f}s", flush=True)
+        res[key] = r
 
     json.dump({"val_cache": VAL_CACHE, "label_dtheta_deg": LABEL_DTHETA_DEG, "runs": res,
                "sec": time.time() - t_all}, open(OUT, "w"), indent=2, ensure_ascii=False)
