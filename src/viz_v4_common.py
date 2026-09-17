@@ -448,3 +448,99 @@ def annotate_n(ax, xs, ns, y=None, fontsize=7.2):
     for x, n in zip(xs, ns):
         ax.text(x, 1.0 if y is None else y, f"n={int(n):,}", transform=tr, ha="center", va="bottom",
                 fontsize=fontsize, color=MUTED if faded(n) else INK2)
+
+
+# ---------------------------------------------------------------- 결정 트리 도식 (필수 요건 11)
+# 규칙 흐름(처리 로직)과 sklearn 얕은 트리(분석용)를 같은 모양으로 그린다.
+# 노드 = {"text": 글, "children": [(가지 글, 노드), ...], "color": 면색, "tc": 글자색}
+def tree_layout(node, depth=0, counter=None):
+    """잎을 왼쪽부터 0, 1, 2 … 에 놓고 부모는 자식 가운데에 둔다. 반환: 잎 수."""
+    if counter is None:
+        counter = [0]
+    node["depth"] = depth
+    kids = node.get("children") or []
+    if not kids:
+        node["x"] = float(counter[0])
+        counter[0] += 1
+    else:
+        for _, c in kids:
+            tree_layout(c, depth + 1, counter)
+        node["x"] = (kids[0][1]["x"] + kids[-1][1]["x"]) / 2
+    return counter[0]
+
+
+def tree_depth(node):
+    kids = node.get("children") or []
+    return 0 if not kids else 1 + max(tree_depth(c) for _, c in kids)
+
+
+def draw_tree(ax, root, fontsize=8.4, edge_fs=8.0, y_gap=1.0):
+    """위에서 아래로 그리는 트리. 가지 글은 자식 위, 꺾인 선 위에 둔다."""
+    n_leaves = tree_layout(root)
+    dmax = tree_depth(root)
+
+    def rec(nd):
+        x, y = nd["x"], -nd["depth"] * y_gap
+        for lab, c in nd.get("children") or []:
+            cx, cy = c["x"], -c["depth"] * y_gap
+            ym = y - 0.42 * y_gap
+            ax.plot([x, x, cx, cx], [y, ym, ym, cy], color=AXIS, lw=1.3, zorder=1, solid_capstyle="butt")
+            if lab:
+                ax.text(cx, ym - 0.05 * y_gap, lab, ha="center", va="top", fontsize=edge_fs, color=INK2, zorder=2,
+                        bbox=dict(facecolor=SURF, edgecolor="none", pad=0.6))
+            rec(c)
+        ax.text(x, y, nd["text"], ha="center", va="center", fontsize=nd.get("fs", fontsize), color=nd.get("tc", INK),
+                zorder=3, linespacing=1.25,
+                bbox=dict(boxstyle="round,pad=0.45", facecolor=nd.get("color", "#ffffff"),
+                          edgecolor=nd.get("ec", AXIS), lw=1.0))
+        return nd
+
+    rec(root)
+    ax.set_xlim(-0.6, n_leaves - 0.4)
+    ax.set_ylim(-(dmax + 0.55) * y_gap, 0.5 * y_gap)
+    ax.axis("off")
+    return n_leaves, dmax
+
+
+def ramp_color(v, lo, hi, ramp=None):
+    """값 → 순서 램프 색 (밝을수록 작다). 글자색도 함께 준다."""
+    ramp = ramp or BLUE_RAMP
+    q = 0.0 if hi <= lo else float(np.clip((v - lo) / (hi - lo), 0.0, 1.0))
+    k = int(round(q * (len(ramp) - 1)))
+    return ramp[k], ("white" if k >= 7 else INK)
+
+
+def sk_tree_nodes(est, feat_names, value_fn, text_fn, thr_fmt=None, lo=None, hi=None):
+    """sklearn DecisionTree → draw_tree 노드 (잎 규칙·표본 수·값 포함).
+
+    value_fn(tree_, j) -> 노드 값(평균·비율), text_fn(n, v) -> 노드 글, thr_fmt(이름, 임계) -> 가지 글의 수 표기.
+    """
+    t = est.tree_
+    vals = [value_fn(t, j) for j in range(t.node_count)]
+    lo = min(vals) if lo is None else lo
+    hi = max(vals) if hi is None else hi
+    thr_fmt = thr_fmt or (lambda name, x: f"{x:.3g}")
+
+    def build(j, rule):
+        n = int(t.n_node_samples[j])
+        v = vals[j]
+        fc, tc = ramp_color(v, lo, hi)
+        nd = {"id": j, "n": n, "value": v, "rule": list(rule), "text": text_fn(n, v), "color": fc, "tc": tc}
+        if t.children_left[j] != -1:
+            name = feat_names[t.feature[j]]
+            thr = thr_fmt(name, float(t.threshold[j]))
+            nd["children"] = [(f"{name} ≤ {thr}", build(int(t.children_left[j]), rule + [f"{name} ≤ {thr}"])),
+                              (f"{name} > {thr}", build(int(t.children_right[j]), rule + [f"{name} > {thr}"]))]
+        return nd
+
+    return build(0, [])
+
+
+def tree_leaves(nd):
+    kids = nd.get("children") or []
+    if not kids:
+        return [nd]
+    out = []
+    for _, c in kids:
+        out += tree_leaves(c)
+    return out

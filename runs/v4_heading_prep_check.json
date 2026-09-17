@@ -1,0 +1,586 @@
+{
+  "1_focal_reimplementation": {
+    "n": 400,
+    "a10_max": 4.743638637449976e-07,
+    "h10_max_rad": 1.1857742787668712e-07,
+    "a2_max": 9.503636704266683e-07,
+    "h2_max_rad": 9.568269021542619e-08,
+    "n_h10_gt_1e-4": 0,
+    "n_h2_gt_1e-4": 0
+  },
+  "2_summary_recalc": {
+    "note": "대부분 같은 scan.npz 를 다른 코드(pandas group-by)로 다시 집계한 것이다 — 원본부터의 독립 재현은 1·4·(감독 세션 검토) 가 맡는다",
+    "n_checks": 69,
+    "n_fail": 0,
+    "fails": {},
+    "all": {
+      "jump10_pct": {
+        "recalc": 1.584760685128862,
+        "summary": 1.584760685128862,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "jump2_pct": {
+        "recalc": 0.6162958219945573,
+        "summary": 0.6162958219945573,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "rate10_mv_p50": {
+        "recalc": 2.094955622226311,
+        "summary": 2.094955622226311,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "rate10_mv_p99": {
+        "recalc": 57.43308748898583,
+        "summary": 57.43308748898583,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "rate2_mv_p50": {
+        "recalc": 1.406104670828984,
+        "summary": 1.406104670828984,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "rate2_mv_p99": {
+        "recalc": 32.246565141530795,
+        "summary": 32.246565141530795,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "slip_abs_p50": {
+        "recalc": 1.2187789554970754,
+        "summary": 1.2187789554970754,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "slip_abs_p99": {
+        "recalc": 34.06822129676127,
+        "summary": 34.06822129676127,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "slip_gt90_pct": {
+        "recalc": 0.6242013614754287,
+        "summary": 0.6242013614754287,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "ramp_n": {
+        "recalc": 16208.0,
+        "summary": 16208.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "ramp_ratio_t0": {
+        "recalc": 0.483770164997236,
+        "summary": 0.4837701649972361,
+        "abs_diff": 5.551115123125783e-17,
+        "ok": true
+      },
+      "ramp_first_lt_0.8_pct": {
+        "recalc": 96.45853899308983,
+        "summary": 96.45853899308983,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "ramp_2hz_seg0_p50": {
+        "recalc": 1.0166835475020832,
+        "summary": 1.0166835475020832,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "recon_10hz_av2_mean": {
+        "recalc": 0.878544859353084,
+        "summary": 0.878544859353084,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_none_pct": {
+        "recalc": 21.860953835191125,
+        "summary": 21.860953835191125,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_none_pct_vs_cache_meta": {
+        "recalc": 21.860953835191125,
+        "summary": 21.860953835191125,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_posdiff_pct": {
+        "recalc": 29.7274657708556,
+        "summary": 29.7274657708556,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_posdiff_pct_vs_cache_meta": {
+        "recalc": 29.7274657708556,
+        "summary": 29.7274657708556,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_av2_pct": {
+        "recalc": 48.41158039395327,
+        "summary": 48.41158039395327,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_src_av2_pct_vs_cache_meta": {
+        "recalc": 48.41158039395327,
+        "summary": 48.41158039395327,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "av2_share_trackvmax_<0.5": {
+        "recalc": 84.51888461865518,
+        "summary": 84.51888461865518,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "av2_share_trackvmax_0.5–2": {
+        "recalc": 9.384959340259405,
+        "summary": 9.384959340259405,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "av2_share_trackvmax_2–5": {
+        "recalc": 4.630835898459444,
+        "summary": 4.630835898459444,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "av2_share_trackvmax_≥5": {
+        "recalc": 1.4653201426259743,
+        "summary": 1.4653201426259743,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_stationary_pct": {
+        "recalc": 53.444902529648296,
+        "summary": 53.444902529648296,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_never_posdiff_pct": {
+        "recalc": 41.54303455998371,
+        "summary": 41.54303455998371,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "agents_full_obs_pct": {
+        "recalc": 52.25958161551382,
+        "summary": 52.25958161551382,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "flip10_pct_verifiable": {
+        "recalc": 16.391912117293188,
+        "summary": 16.391912117293188,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "tree_av2_flip1_steps_by_output": {
+        "recalc": 1007446.0,
+        "summary": 1007446.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "tree_av2_notflipped_steps_by_output": {
+        "recalc": 10881833.0,
+        "summary": 10881833.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "tree2_av2_flip1_samples_by_output": {
+        "recalc": 30514.0,
+        "summary": 30514.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "tree2_posdiff_samples": {
+        "recalc": 848555.0,
+        "summary": 848555.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "stationary_flipped_av2_same_pct": {
+        "recalc": 98.10126582278481,
+        "summary": 98.10126582278481,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "stationary_flipped_h10_same_pct": {
+        "recalc": 10.305095748133724,
+        "summary": 10.305095748133724,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "focal_tree_flip1_steps_by_output": {
+        "recalc": 5564.0,
+        "summary": 5564.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_정지_n": {
+        "recalc": 2506.0,
+        "summary": 2506.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_정지_av2_pct": {
+        "recalc": 96.16280925778133,
+        "summary": 96.16280925778132,
+        "abs_diff": 1.4210854715202004e-14,
+        "ok": true
+      },
+      "state_정지_jump10_pct": {
+        "recalc": 5.347166799680767,
+        "summary": 5.347166799680767,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_좌회전_n": {
+        "recalc": 1237.0,
+        "summary": 1237.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_좌회전_av2_pct": {
+        "recalc": 4.160064672594988,
+        "summary": 4.160064672594988,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_좌회전_jump10_pct": {
+        "recalc": 0.8892481810832661,
+        "summary": 0.8892481810832661,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_우회전_n": {
+        "recalc": 1232.0,
+        "summary": 1232.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_우회전_av2_pct": {
+        "recalc": 4.832792207792207,
+        "summary": 4.832792207792208,
+        "abs_diff": 8.881784197001252e-16,
+        "ok": true
+      },
+      "state_우회전_jump10_pct": {
+        "recalc": 1.7857142857142856,
+        "summary": 1.7857142857142856,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_좌차선변경_n": {
+        "recalc": 97.0,
+        "summary": 97.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_좌차선변경_av2_pct": {
+        "recalc": 2.3505154639175254,
+        "summary": 2.350515463917526,
+        "abs_diff": 4.440892098500626e-16,
+        "ok": true
+      },
+      "state_좌차선변경_jump10_pct": {
+        "recalc": 0.0,
+        "summary": 0.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_우차선변경_n": {
+        "recalc": 80.0,
+        "summary": 80.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_우차선변경_av2_pct": {
+        "recalc": 0.625,
+        "summary": 0.625,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_우차선변경_jump10_pct": {
+        "recalc": 0.0,
+        "summary": 0.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_급감속_n": {
+        "recalc": 1425.0,
+        "summary": 1425.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_급감속_av2_pct": {
+        "recalc": 14.461754385964914,
+        "summary": 14.461754385964912,
+        "abs_diff": 1.7763568394002505e-15,
+        "ok": true
+      },
+      "state_급감속_jump10_pct": {
+        "recalc": 1.8947368421052633,
+        "summary": 1.8947368421052633,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_급가속_n": {
+        "recalc": 3390.0,
+        "summary": 3390.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_급가속_av2_pct": {
+        "recalc": 22.362241887905608,
+        "summary": 22.362241887905604,
+        "abs_diff": 3.552713678800501e-15,
+        "ok": true
+      },
+      "state_급가속_jump10_pct": {
+        "recalc": 2.1238938053097343,
+        "summary": 2.1238938053097343,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_정속_n": {
+        "recalc": 5578.0,
+        "summary": 5578.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_정속_av2_pct": {
+        "recalc": 0.48189315166726426,
+        "summary": 0.48189315166726426,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_정속_jump10_pct": {
+        "recalc": 0.16134815346002152,
+        "summary": 0.16134815346002152,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_기타_n": {
+        "recalc": 9443.0,
+        "summary": 9443.0,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_기타_av2_pct": {
+        "recalc": 11.234141692258817,
+        "summary": 11.234141692258817,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "state_기타_jump10_pct": {
+        "recalc": 1.2813724451975008,
+        "summary": 1.2813724451975008,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "same_tracks_judged10_pct": {
+        "recalc": 12.01507678642388,
+        "summary": 12.01507678642388,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "same_tracks_flip10_pct": {
+        "recalc": 3.881138823309413,
+        "summary": 3.881138823309413,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "same_tracks_flip2_pct": {
+        "recalc": 1.1887675993236873,
+        "summary": 1.1887675993236873,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "stationary_flipped_in_lane_pct": {
+        "recalc": 22.04256841352173,
+        "summary": 22.04256841352173,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "treeB_auc_test_groupby": {
+        "recalc": 0.9135704052547036,
+        "summary": 0.9135704052547036,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "treeB_brier_skill_groupby": {
+        "recalc": 0.3195975930662195,
+        "summary": 0.3195975930662195,
+        "abs_diff": 0.0,
+        "ok": true
+      },
+      "treeB_majority_test": {
+        "recalc": 0.9294867774641998,
+        "summary": 0.9294867774641998,
+        "abs_diff": 0.0,
+        "ok": true
+      }
+    }
+  },
+  "3_panel_facts": {
+    "all_ok": true,
+    "rows": [
+      {
+        "n": 1,
+        "sid": "d80c7505-36ed-4757-8708-ec82354d9b76",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 6,
+        "n_cand_cache": 6,
+        "never_moved": 2
+      },
+      {
+        "n": 2,
+        "sid": "aac1b604-a96f-4f8f-9057-f14a5928995a",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 90.0,
+        "av2_pct": 10.0,
+        "n_cand_parquet": 15,
+        "n_cand_cache": 15,
+        "never_moved": 4
+      },
+      {
+        "n": 3,
+        "sid": "8184be0f-0f44-4482-a03b-528dcb3fc18d",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 24,
+        "n_cand_cache": 24,
+        "never_moved": 9
+      },
+      {
+        "n": 4,
+        "sid": "4334f370-733a-4fa1-a6d1-d7bcbcd7de48",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 50.0,
+        "av2_pct": 50.0,
+        "n_cand_parquet": 32,
+        "n_cand_cache": 32,
+        "never_moved": 16
+      },
+      {
+        "n": 5,
+        "sid": "6405f80b-4720-4c55-9f33-7a0c2936f8a5",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 11,
+        "n_cand_cache": 11,
+        "never_moved": 6
+      },
+      {
+        "n": 6,
+        "sid": "0c42bdd2-3ffc-42ac-b222-99726d9e9368",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 50,
+        "n_cand_cache": 50,
+        "never_moved": 1
+      },
+      {
+        "n": 7,
+        "sid": "178cda8b-242c-4bc6-b6fd-d5bf6ed5db4e",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 17,
+        "n_cand_cache": 17,
+        "never_moved": 5
+      },
+      {
+        "n": 8,
+        "sid": "049b91df-a0c0-4ab9-8f6a-a7f7a64dba62",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 25,
+        "n_cand_cache": 25,
+        "never_moved": 15
+      },
+      {
+        "n": 9,
+        "sid": "2f4dd018-c54f-4a1d-a3e4-cbb8f5fe93bc",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 18.0,
+        "av2_pct": 82.0,
+        "n_cand_parquet": 23,
+        "n_cand_cache": 23,
+        "never_moved": 16
+      },
+      {
+        "n": 10,
+        "sid": "d4122e99-f2bd-400c-8313-2df2626139eb",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 37,
+        "n_cand_cache": 37,
+        "never_moved": 8
+      },
+      {
+        "n": 11,
+        "sid": "a530face-2297-4058-9ff7-e4f0feb3c8e5",
+        "posdiff_pct_ok": true,
+        "n_cand_ok": true,
+        "never_moved_ok": true,
+        "posdiff_pct": 100.0,
+        "av2_pct": 0.0,
+        "n_cand_parquet": 17,
+        "n_cand_cache": 17,
+        "never_moved": 12
+      }
+    ]
+  },
+  "4_lane_independent_centerline": {
+    "n_agents": 6005,
+    "lane_match_agree_pct": 99.46711074104913,
+    "n_both_in_lane": 2055,
+    "ag_av2_agree_pct": 100.0,
+    "ag_10_agree_pct": 100.0,
+    "opp_av2_pct_mine_vs_indep": [
+      1.7518248175182483,
+      1.7518248175182483
+    ],
+    "opp_10_pct_mine_vs_indep": [
+      7.445255474452554,
+      7.445255474452554
+    ],
+    "note": "독립 중심선 = 지도 JSON 좌/우 경계를 40점으로 맞춰 평균, 0.25 m 간격 재표본. 원 계산은 LaneGraph 중심선 + 0.5 m 간격"
+  }
+}
