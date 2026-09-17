@@ -95,6 +95,9 @@ DEFINITIONS = {
     "eff_br": "exp(경로 확률 엔트로피)의 평균, 구별 분기 ≥ 2 만",
     "final": f"최종값 = 평가한 마지막 {LAST_K} 에폭 평균",
     "e90": f"(값 − 첫 에폭 값) / (최종 − 첫 에폭 값) ≥ {REACH:g} 에 처음 닿는 에폭. |최종 − 첫| ≤ 요동이면 정하지 않음",
+    "e90_stay": f"유지 에폭 = 그 에폭에 진행률 ≥ {REACH:g} 이고 그 뒤 끝까지 진행률 ≥ {REACH:g} − 요동/|최종 − 첫| "
+                "(요동 한 번만큼 여유)인 첫 에폭",
+    "e90_stay_strict": f"엄격 유지 에폭 = 그 에폭부터 끝까지 진행률 ≥ {REACH:g} 인 첫 에폭 (여유 없음)",
     "fluct": "요동 = 에폭 번호가 중앙 이상인 연속 에폭 쌍의 |차이| 중앙값",
     "end_deficit": "끝 1초 부족 거리 = Σ_{5.1–6.0 s} (4.1–5.0 s 평균 속력 − 속력)·0.1 s — 등속 대비 덜 간 거리",
 }
@@ -215,7 +218,9 @@ def load_or_pick(df, n, per_class, data_dir, picks_from=None):
     src = Path(picks_from) if picks_from else (path if path.exists() else None)
     if src is not None:
         d = json.loads(src.read_text())
-        picks = [dict(p, idx=sid2i[p["sid"]]) for p in d["picks"] if p["sid"] in sid2i]
+        # pool_n = 고를 때의 모집단 크기(val 앞 N) — 다른 N 으로 다시 그려도 그림 설명이 고른 조건을 적게
+        picks = [dict(p, idx=sid2i[p["sid"]], pool_n=int(p.get("pool_n", d.get("n_val", n))))
+                 for p in d["picks"] if p["sid"] in sid2i]
         if picks_from or d.get("per_class") == per_class:
             if len(picks) < len(d["picks"]):
                 print(f"[picks] {src} 의 {len(d['picks']) - len(picks)}개는 val 앞 {n} 밖이라 뺐다", flush=True)
@@ -223,7 +228,7 @@ def load_or_pick(df, n, per_class, data_dir, picks_from=None):
             if picks_from:
                 path.write_text(json.dumps(dict(d, picks=picks, copied_from=str(src)), indent=2, ensure_ascii=False))
             return picks
-    picks = pick_fixed(df, per_class)
+    picks = [dict(p, pool_n=int(n)) for p in pick_fixed(df, per_class)]
     data_dir.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"seed": C.SEED, "n_val": n, "per_class": per_class,
                                 "rule": "정답 기반 상황별 무작위, 폴백·살아있는 모드 1개 제외", "picks": picks},
@@ -335,6 +340,76 @@ def run_epochs(tag, cfg, ckpts, epochs, device, a, n, cache_dir, df, picks, data
     return {e: rows[e] for e in epochs}
 
 
+PANEL_EXTRA_ALL = ("traj", "prob", "v", "a", "h", "theta", "d", "band")
+
+
+def panel_extra(tag, cfg, ckpts, epochs, picks, cache_dir, device, data_dir, z, batch=64):
+    """고정 시나리오만 다시 추론해 h·θ·d·밴드를 모은다 (에폭 결과 npz 에는 궤적·확률·v·a 만 있다).
+    키 = 체크포인트 해시·장치·고정 시나리오·이 함수 소스·calc_key·캐시. 같은 출력인 궤적·확률·v·a 를 저장된 pn_* 와
+    대조한다(요건 9b) — 배치 구성이 달라도 같은 값이어야 한다."""
+    import torch
+    from torch.utils.data import DataLoader, Subset
+    from dataset_cached import CachedV4Dataset
+    from train_v4 import to_dev
+    idx = [int(p["idx"]) for p in picks]
+    pk_hash = sha_bytes(np.asarray(idx, np.int64).tobytes())[:8]
+    src_h = sha_bytes(inspect.getsource(panel_extra))[:8]
+    ck = calc_key()
+    path = data_dir / f"epoch_panel_extra_{pk_hash}.npz"
+    keys = {e: "|".join([sha_bytes(ckpts[e].read_bytes())[:16], device, pk_hash, src_h, ck, Path(cache_dir).name])
+            for e in epochs}
+    old = {}
+    if path.exists():
+        zz = np.load(path, allow_pickle=False)
+        for r, (e, k) in enumerate(zip(zz["epochs"], zz["keys"])):
+            if keys.get(int(e)) == str(k):
+                old[int(e)] = {f: zz[f][r] for f in PANEL_EXTRA_ALL}
+    ds = CachedV4Dataset(cache_dir)
+    sub = Subset(ds, idx)
+    out = {}
+    t0 = time.time()
+    n_new = 0
+    for e in epochs:
+        if e in old:
+            out[e] = old[e]
+            continue
+        sd = torch.load(ckpts[e], map_location="cpu")
+        model, _, _ = C.build_model(sd, cfg.get("th0", "current"), device)
+        rec = {f: [] for f in PANEL_EXTRA_ALL}
+        with torch.no_grad():
+            for b in DataLoader(sub, batch_size=batch, shuffle=False, num_workers=0):
+                kw = to_dev(b, device, "l0", True)
+                traj, logits, aux = model(**kw)
+                cpu = lambda t: t.detach().float().cpu().numpy()
+                rec["traj"].append(cpu(traj))
+                rec["prob"].append(cpu(torch.softmax(logits, 1)))
+                for f in ("v", "a", "h", "theta", "d", "band"):
+                    rec[f].append(cpu(aux[f]))
+        out[e] = {f: np.concatenate(v).astype(np.float32) for f, v in rec.items()}
+        n_new += 1
+        del model, sd
+    if n_new:
+        es = sorted(out)
+        np.savez(path, epochs=np.array(es), keys=np.array([keys[e] for e in es]),
+                 **{f: np.stack([out[e][f] for e in es]) for f in PANEL_EXTRA_ALL})
+    # 대조: 저장된 에폭 결과(pn_*)와 같은 출력인가 (살아있는 모드만)
+    row = {int(e): r for r, e in enumerate(z["epochs"])}
+    chk = {"n_epochs": len(epochs), "n_new": n_new, "device": device, "sec": round(time.time() - t0, 1), "max_abs": {}}
+    for f in ("traj", "prob", "v", "a"):
+        m = 0.0
+        for e in epochs:
+            al = z["pn_alive"][row[e]].astype(bool)
+            dd = np.abs(out[e][f].astype(np.float64) - z["pn_" + f][row[e]].astype(np.float64))
+            if dd.ndim > 2:
+                dd = dd.reshape(dd.shape[0], dd.shape[1], -1).max(-1)
+            m = max(m, float(dd[al].max()))
+        chk["max_abs"][f] = m
+    chk["ok"] = bool(max(chk["max_abs"].values()) < 1e-3)
+    print(f"[panel] 고정 시나리오 재추론 {n_new}/{len(epochs)} 에폭 ({chk['sec']} s) · 저장 결과와 최대 차 "
+          + " · ".join(f"{k} {v:.1e}" for k, v in chk["max_abs"].items()), flush=True)
+    return out, chk
+
+
 # --------------------------------------------------------------------------- 3. 집계
 def agg(E, m, nd, n_alive, live):
     """한 에폭·한 모집단(m) 의 지표. 정의는 DEFINITIONS."""
@@ -387,17 +462,23 @@ def order_stats(epochs, ys):
     resolved = bool(abs(d) > fl)
     e90 = next((int(e) for e, p in zip(ep, prog) if p >= REACH), None) if resolved else None
     # 유지 에폭: 그 에폭부터 끝까지 진행률이 (90% − 요동 한 번) 아래로 내려가지 않는 첫 에폭 — 한 번 튄 값과 구별한다
-    e90s = None
+    e90s = e90x = None
     if resolved:
         floor = REACH - fl / abs(d)
         for k in range(len(ep)):
             if np.all(prog[k:] >= floor) and prog[k] >= REACH:
                 e90s = int(ep[k])
                 break
+        # 엄격: 여유 없이 끝까지 90% 이상
+        for k in range(len(ep)):
+            if np.all(prog[k:] >= REACH):
+                e90x = int(ep[k])
+                break
     return {"first": first, "final": final, "change": d,
             "change_pct": 100.0 * d / abs(first) if first else float("nan"),
             "fluct": fl, "fluct_pct": 100.0 * fl / abs(final) if final else float("nan"),
             "snr": abs(d) / fl if fl > 0 else float("inf"), "resolved": resolved, "e90": e90, "e90_stay": e90s,
+            "e90_stay_strict": e90x,
             "progress": [float(p) for p in prog]}
 
 
@@ -551,7 +632,7 @@ def fig_class_curves(res, epochs, n_cls, metrics, title, foot, path, best_ep=Non
     nr, nc = len(metrics), len(FACETS)
     W, H = 4.25 * nc + 1.2, 2.25 * nr + 2.0
     fig, axes = plt.subplots(nr, nc, figsize=(W, H), sharex=True, sharey="row", squeeze=False)
-    fig.subplots_adjust(left=0.09, right=0.985, top=1 - 1.55 / H, bottom=0.62 / H, wspace=0.13, hspace=0.2)
+    fig.subplots_adjust(left=0.09, right=0.985, top=1 - 1.55 / H, bottom=0.86 / H, wspace=0.13, hspace=0.2)
     ep = np.asarray(epochs)
     span = max(ep.max() - ep.min(), 1)
     todo = []
@@ -602,9 +683,37 @@ def fig_class_curves(res, epochs, n_cls, metrics, title, foot, path, best_ep=Non
 
 
 # --------------------------------------------------------------------------- e3 학습 로그
-def fig_train_log(tag, hist, hist_src, refs, res, epochs, n_val, cfg, path):
+LIGHT = {C.C_BLUE: "#7fb0ea", C.C_ORANGE: "#f29a70"}
+
+
+def run_style(cfg):
+    """판 비교 그림(viz_v4_compare)과 같은 규칙 (필수 요건 6): 색 = 입력 주기(10 Hz 파랑 · 2 Hz 주황),
+    선 = 학습률 스케줄(코사인 = 진한 실선 · 상수 = 옅은 점선)."""
+    col = C.C_ORANGE if str(cfg.get("input", "")).endswith("2hz") else C.C_BLUE
+    cos = cfg.get("lr_sched") == "cosine"
+    return (col if cos else LIGHT[col]), ("-" if cos else (0, (4, 2)))
+
+
+def run_styles(tags):
+    """판마다 (색, 선)과 규칙 사용 여부. 규칙으로 둘 이상이 같은 모양이 되면 예전처럼 SERIES 색 + 실선으로 되돌린다."""
+    st = {t: run_style(C.run_config(t)[0]) for t in tags}
+    if len(set(st.values())) < len(st):
+        return {t: (C.SERIES[k % len(C.SERIES)], "-") for k, t in enumerate(tags)}, False
+    return st, True
+
+
+N_CACHE = None      # main 이 val 캐시 크기로 채운다
+
+
+def pop_desc(n, cfg=None):
+    return f"val 전체 {n:,}" if N_CACHE is not None and n >= N_CACHE else f"val 앞 {n:,}"
+
+
+def fig_train_log(tag, hist, hist_src, refs, res, epochs, n_val, cfg, path, styles=None, rule=False):
     plt = C.setup_mpl()
     from matplotlib.lines import Line2D
+    styles = styles or {}
+    col0, ls0 = styles.get(tag, (C.C_BLUE, "-"))
     panels = [("minADE6", "minADE6 [m]", lambda r: r["minade"]),
               ("minFDE6", "minFDE6 [m]", lambda r: r["minfde"]),
               ("val_offlane_steps", "이탈 (시나리오당 0~6)", lambda r: r["offlane"]),
@@ -614,28 +723,29 @@ def fig_train_log(tag, hist, hist_src, refs, res, epochs, n_val, cfg, path):
               ("sec", "에폭 시간 [s] (train + val 평가)", None)]
     fig, axes = plt.subplots(2, 4, figsize=(19.5, 9.0))
     fig.subplots_adjust(left=0.05, right=0.985, top=0.855, bottom=0.08, wspace=0.26, hspace=0.36)
-    runs = [(tag, hist, C.C_BLUE, "이 판")] + [(t, h, col, "비교") for (t, h, col) in refs]
+    runs = [(tag, hist, col0, ls0, "이 판")] + [(t, h, col, ls, "비교") for (t, h, col, ls) in refs]
     for ax, (key, lab, fsub) in zip(axes.flat, panels):
-        for t, h, col, _ in runs:
+        for t, h, col, ls, _ in runs:
             hh = [r for r in h if key in r]
             if not hh:
                 continue
-            ax.plot([r["epoch"] for r in hh], [r[key] for r in hh], color=col, lw=2.0, marker="o", ms=4.2,
+            ax.plot([r["epoch"] for r in hh], [r[key] for r in hh], color=col, ls=ls, lw=2.0, marker="o", ms=4.2,
                     mec=C.SURF, mew=1.0, zorder=3)
             b = min(h, key=lambda r: r["minADE6"])
             if key in b:
                 ax.scatter([b["epoch"]], [b[key]], s=120, facecolors="none", edgecolors=col, linewidths=1.6,
                            zorder=4)
         if fsub is not None and res:
-            ax.plot(epochs, [fsub(res[e]["전체"]) for e in epochs], color=C.C_BLUE, lw=1.2, ls=(0, (3, 2)),
-                    marker="o", ms=4.0, mfc=C.SURF, mec=C.C_BLUE, mew=1.1, zorder=3)
+            # 다시 잰 값: 로그 점을 감싸는 빈 고리 (겹치면 재현된 것)
+            ax.plot(epochs, [fsub(res[e]["전체"]) for e in epochs], color=col0, lw=0.9, ls=(0, (1, 1.6)),
+                    marker="o", ms=6.2, mfc="none", mec=C.INK, mew=0.9, zorder=5)
         ax.set_title(lab, loc="left", fontsize=10.5)
         ax.set_xlabel("에폭")
-        epoch_axis(ax, sorted(set(epochs) | {r["epoch"] for _, h, _, _ in runs for r in h}))
+        epoch_axis(ax, sorted(set(epochs) | {r["epoch"] for _, h, _, _, _ in runs for r in h}))
     ax = axes.flat[7]
     ax.axis("off")
     lines = []
-    for t, h, _, _ in runs:
+    for t, h, _, _, _ in runs:
         if not h:
             lines.append(f"{t}: history 없음")
             continue
@@ -646,22 +756,23 @@ def fig_train_log(tag, hist, hist_src, refs, res, epochs, n_val, cfg, path):
                   f"  에폭 시간 중앙 {np.median(secs):.0f} s · 합 {sum(secs) / 60:.1f} 분"]
     lines += ["", f"이 판 history 출처: {hist_src}" + (" (소수 2~3자리)" if hist_src == "로그" else ""),
               f"학습 로그의 val 평가 = val {cfg.get('val_limit', '?'):,} 개" if isinstance(cfg.get('val_limit'), int)
-              else "", f"점선 = 이 판 에폭 체크포인트를 val 앞 {n_val:,} 개로 다시 잰 값",
-              "흔들림 = train_v4.evaluate 의 θ·a 두 항 합"]
+              else "", f"검은 빈 고리 = 이 판 에폭 체크포인트를 {pop_desc(n_val, cfg)} 개로 다시 잰 값",
+              "흔들림 = train_v4.evaluate 의 θ·a 두 항 합",
+              "색 = 입력 주기(10 Hz 파랑 · 2 Hz 주황), 선 = 스케줄(코사인 실선 · 상수 옅은 점선)" if rule else ""]
     ax.text(0.0, 1.0, "\n".join(lines), va="top", ha="left", fontsize=8.6, color=C.INK2, transform=ax.transAxes,
             linespacing=1.5)
-    hs = [Line2D([], [], color=col, lw=2.0, marker="o", ms=4.2, mec=C.SURF) for _, _, col, _ in runs]
-    labs = [f"{t} ({'이 판' if k == 0 else '비교'})" for k, (t, _, _, _) in enumerate(runs)]
-    hs += [Line2D([], [], color=C.C_BLUE, lw=1.2, ls=(0, (3, 2)), marker="o", ms=4.0, mfc=C.SURF, mec=C.C_BLUE),
+    hs = [Line2D([], [], color=col, ls=ls, lw=2.0, marker="o", ms=4.2, mec=C.SURF) for _, _, col, ls, _ in runs]
+    labs = [f"{t} ({'이 판' if k == 0 else '비교'})" for k, (t, _, _, _, _) in enumerate(runs)]
+    hs += [Line2D([], [], color=col0, lw=0.9, ls=(0, (1, 1.6)), marker="o", ms=6.2, mfc="none", mec=C.INK, mew=0.9),
            Line2D([], [], color=C.INK2, marker="o", ms=10, mfc="none", ls="none")]
-    labs += [f"이 판 · val 앞 {n_val:,} 재계산", "best 에폭 (그 판의 로그 minADE6 최소)"]
+    labs += [f"이 판 · {pop_desc(n_val, cfg)} 재계산", "best 에폭 (그 판의 로그 minADE6 최소)"]
     fig.legend(hs, labs, loc="upper left", bbox_to_anchor=(0.05, 0.935), ncol=4, fontsize=9)
     fig.suptitle("학습 로그 곡선 — 에폭마다 val 평가값 (선마다 한 판)", x=0.01, y=0.985, ha="left", fontsize=13)
     return C.savefig(fig, path)
 
 
 # --------------------------------------------------------------------------- e4 무엇이 먼저 배워지나
-def fig_learning_order(LO, res, epochs, path):
+def fig_learning_order(LO, res, epochs, path, tag=""):
     plt = C.setup_mpl()
     from matplotlib.colors import LinearSegmentedColormap
     from matplotlib.gridspec import GridSpec
@@ -776,7 +887,7 @@ def fig_learning_order(LO, res, epochs, path):
     ax.grid(False)
     ax.set_title(f"(c) 상황별 90% 도달 에폭 — 작을수록 먼저 배운다 · — = 변화 ≤ 요동 · 칠하지 않은 회색 숫자 = 그 지표 "
                  f"모집단 n < {C.MIN_N}", loc="left", fontsize=10.5)
-    fig.suptitle("무엇이 먼저 배워지나 — 지표마다 '최종값까지 변화의 90%' 에 처음 닿는 에폭과 에폭 사이 요동",
+    fig.suptitle(f"무엇이 먼저 배워지나 — 지표마다 '최종값까지 변화의 90%' 에 처음 닿는 에폭과 에폭 사이 요동 · {tag}",
                  x=0.01, y=0.975, ha="left", fontsize=13)
     note(fig, f"최종 = 평가한 마지막 {LAST_K} 에폭 평균. 요동 = 에폭 번호가 중앙 이상인 연속 에폭 쌍의 |차이| 중앙값. "
               "첫 에폭 체크포인트는 이미 한 에폭(약 6,250 스텝)을 학습한 뒤라 그 안의 순서는 보이지 않는다. "
@@ -785,7 +896,7 @@ def fig_learning_order(LO, res, epochs, path):
 
 
 # --------------------------------------------------------------------------- e5 끝 1초 감속
-def fig_end_decel(ED, epochs, panel_epochs, path):
+def fig_end_decel(ED, epochs, panel_epochs, path, tag=""):
     plt = C.setup_mpl()
     from matplotlib.lines import Line2D
     ec = C.epoch_colors(panel_epochs)
@@ -797,13 +908,13 @@ def fig_end_decel(ED, epochs, panel_epochs, path):
     a.plot(t, ED["gt_ratio"], color=C.C_GT, lw=2.0, marker="o", ms=3, zorder=4)
     a.plot(t, ED["field_ratio"], color=C.MUTED, lw=1.4, ls=(0, (3, 2)), zorder=4)
     for e in panel_epochs:
-        a.plot(t, ED["epoch"][e]["top_ratio"], color=ec[e], lw=1.9, zorder=3)
+        a.plot(t, ED["epoch"][e]["top_ratio"], color=ec[e], lw=1.9, zorder=3, **C.step_kw(ms=2.6))
     a.axhline(1, color=C.INK2, lw=0.8, ls=(0, (4, 2)))
-    a.set_xlabel("예측 시간 [s]")
+    a.set_xlabel("예측 시간 [s] · 점 = 0.1 s 스텝")
     a.set_ylabel("속력 ÷ (4.1–5.0 s 평균) — 중앙값")
     a.set_title("(a) 끝 3초 속력 비 — 확률 1위 모드, 에폭별", loc="left", fontsize=10.5)
     hs = [Line2D([], [], color=C.C_GT, lw=2, marker="o", ms=3), Line2D([], [], color=C.MUTED, lw=1.4, ls=(0, (3, 2)))]
-    hs += [Line2D([], [], color=ec[e], lw=1.9) for e in panel_epochs]
+    hs += [Line2D([], [], color=ec[e], lw=1.9, marker="o", ms=2.6) for e in panel_epochs]
     a.legend(hs, ["정답 (위치 차분)", "정답 (AV2 속도 필드·평활)"] + [f"에폭 {e}" for e in panel_epochs],
              loc="lower left", fontsize=8)
     a.text(5.75, 0.98, "라벨 끝\n인공 감속", transform=a.get_xaxis_transform(), ha="center", va="top", fontsize=7.5,
@@ -830,30 +941,295 @@ def fig_end_decel(ED, epochs, panel_epochs, path):
                          (ep[-1], ED["epoch"][epochs[-1]][keys[1]], "승자"),
                          (ep[-1], ED[gt_key], "정답 (위치)"), (ep[-1], ED[fld_key], "정답 (속도 필드)")])
     fl = ED["epoch"]
-    e0, e1 = epochs[0], epochs[-1]
+    k3 = min(LAST_K, len(epochs))
+    first, last = epochs[:k3], epochs[-k3:]
+    mean_ = lambda es, key: float(np.mean([fl[e][key] for e in es]))
+    sd_ = lambda es, key: float(np.std([fl[e][key] for e in es], ddof=1)) if len(es) > 1 else float("nan")
+    early = epochs[:min(10, len(epochs))]
+    late = epochs[-min(10, len(epochs)):]
     fig.suptitle(f"끝 1초 감속 추종 — 정답의 끝 0.5초 인공 감속을 모델이 에폭에 따라 얼마나 따라가나 "
-                 f"(이동 시나리오 n={ED['n']:,})", x=0.01, y=0.975, ha="left", fontsize=13)
-    fig.text(0.01, 0.885, f"추종 비율(모델 부족 거리 ÷ 정답 부족 거리, 중앙값끼리): 1위 에폭 {e0} {fl[e0]['top_follow']:.2f} → "
-                          f"에폭 {e1} {fl[e1]['top_follow']:.2f} · 승자 {fl[e0]['win_follow']:.2f} → "
-                          f"{fl[e1]['win_follow']:.2f}.  정답(위치) {ED['gt_deficit']:.2f} m · 정답(속도 필드) "
-                          f"{ED['field_deficit']:.2f} m", fontsize=9.5, color=C.INK2)
+                 f"(이동 시나리오 n={ED['n']:,}) · {tag}", x=0.01, y=0.975, ha="left", fontsize=13)
+    fig.text(0.01, 0.885, f"추종 비율(모델 부족 거리 ÷ 정답 부족 거리, 중앙값끼리), 처음 {k3} → 마지막 {k3} 에폭 평균: "
+                          f"1위 {mean_(first, 'top_follow'):.2f} → {mean_(last, 'top_follow'):.2f} · "
+                          f"승자 {mean_(first, 'win_follow'):.2f} → {mean_(last, 'win_follow'):.2f} "
+                          f"(단일 에폭 {epochs[0]} → {epochs[-1]}: 1위 {fl[epochs[0]]['top_follow']:.2f} → "
+                          f"{fl[epochs[-1]]['top_follow']:.2f}). 1위 추종의 에폭 간 표준편차: 처음 {len(early)} 에폭 "
+                          f"{sd_(early, 'top_follow'):.2f} · 마지막 {len(late)} 에폭 {sd_(late, 'top_follow'):.2f}.  "
+                          f"정답(위치) {ED['gt_deficit']:.2f} m · 정답(속도 필드) {ED['field_deficit']:.2f} m",
+             fontsize=9.2, color=C.INK2)
     note(fig, f"모집단 = 4.1–5.0 s 정답(위치 차분) 속력 > {MOVE_REF_V:g} m/s 이고 평가한 모든 에폭에서 1위·승자 모드의 같은 구간 "
               f"속력 > {MODEL_REF_V:g} m/s ({ED['n_moving']:,} 중 {ED['n']:,}). 부족 거리 = Σ_(5.1–6.0 s) (기준 속력 − 속력)·0.1 s.")
     return C.savefig(fig, path)
 
 
+# --------------------------------------------------------------------------- e6 뒤반 변화 결정 트리 (요건 11)
+LT_MID, LT_DEPTH, LT_LEAF, LT_SEED = (11, 15), 3, 200, 0
+LT_FEATS = [("v0", "v0 [m/s]"), ("absdh", "|Δh| [°]"), ("absa", "최대|a| [m/s²]"), ("n_distinct", "분기 수"),
+            ("n_reachable", "도달 차로 수"), ("fallback", "폴백"), ("has_lead49", "앞차 있음"),
+            ("thw_f", "시간간격 [s]"), ("move6", "6초 이동 [m]"), ("coverage", "경로 커버리지")]
+
+
+def late_tree(rows, df, epochs, R, path, suspect=None, tag=""):
+    """시나리오별 minADE6 의 뒤반 변화(에폭 11–15 평균 → 마지막 5 에폭 평균)를 시나리오 특성으로 가르는 얕은 트리.
+    서술용이다 — 같은 체크포인트 순서라 학습률 감소와 추가 학습이 섞여 있다."""
+    from sklearn.metrics import r2_score
+    from sklearn.model_selection import train_test_split
+    from sklearn.tree import DecisionTreeRegressor
+    ep = list(epochs)
+    mid = [e for e in ep if LT_MID[0] <= e <= LT_MID[1]]
+    late = ep[-5:]
+    if len(ep) < 20 or len(mid) < 5 or set(mid) & set(late):
+        return None
+    A = lambda es: np.mean([rows[e][1]["minade"].astype(np.float64) for e in es], axis=0)
+    y_mid, y_late = A(mid), A(late)
+    dy = y_late - y_mid
+    X = {}
+    X["v0"] = df["v0"].to_numpy(np.float64)
+    X["absdh"] = np.nan_to_num(np.abs(df["dh6"].to_numpy(np.float64)))
+    X["absa"] = np.maximum(np.abs(df["amax_f"].to_numpy(np.float64)), np.abs(df["amin_f"].to_numpy(np.float64)))
+    X["n_distinct"] = df["n_distinct"].to_numpy(np.float64)
+    X["n_reachable"] = df["n_reachable"].to_numpy(np.float64)
+    X["fallback"] = df["fallback"].to_numpy(np.float64)
+    X["has_lead49"] = df["has_lead49"].to_numpy(np.float64)
+    X["thw_f"] = np.where(np.isfinite(df["thw49"].to_numpy(np.float64)), df["thw49"].to_numpy(np.float64), 99.0)
+    X["move6"] = df["move6"].to_numpy(np.float64)
+    X["coverage"] = df["coverage"].to_numpy(np.float64)
+    for c in C.CLASSES:
+        X[f"cls_{c}"] = (df["cls"].to_numpy() == c).astype(float)
+    names = list(X)
+    labels = dict(LT_FEATS) | {f"cls_{c}": f"상황={c}" for c in C.CLASSES}
+    XM = np.column_stack([X[n] for n in names])
+    lo, hi = np.percentile(dy, [1, 99])
+    yc = np.clip(dy, lo, hi)
+    idx = np.arange(len(dy))
+    tr, te = train_test_split(idx, test_size=0.3, random_state=LT_SEED)
+    is_te = np.zeros(len(dy), bool)
+    is_te[te] = True
+    est = DecisionTreeRegressor(max_depth=LT_DEPTH, min_samples_leaf=LT_LEAF, random_state=LT_SEED)
+    est.fit(XM[tr], yc[tr])
+    r2_tr, r2_te = r2_score(yc[tr], est.predict(XM[tr])), r2_score(yc[te], est.predict(XM[te]))
+    t = est.tree_
+    dpath = est.decision_path(XM).tocsc()
+    stats = {}
+    for j in range(t.node_count):
+        rr = dpath[:, j].nonzero()[0]
+        v = dy[rr]
+        rt = rr[is_te[rr]]
+        stats[j] = {"n": len(rr), "mean": float(v.mean()), "median": float(np.median(v)),
+                    "mean_clip": float(yc[rr].mean()), "mid": float(y_mid[rr].mean()), "late": float(y_late[rr].mean()),
+                    "share_better": float((v < -0.1).mean()), "share_worse": float((v > 0.1).mean()),
+                    "n_test": int(len(rt)), "mean_test": float(dy[rt].mean()) if len(rt) else float("nan"),
+                    "ci_test": float(1.96 * dy[rt].std(ddof=1) / np.sqrt(len(rt))) if len(rt) > 1 else float("nan"),
+                    "rows": rr}
+    bound = max(abs(v["mean_clip"]) for v in stats.values()) or 1.0
+    NEG = ["#eef4fc", C.BLUE_RAMP[0], C.BLUE_RAMP[3], C.BLUE_RAMP[6], C.BLUE_RAMP[8], C.BLUE_RAMP[10]]
+    POS = ["#fdeee6", "#fbd5c1", "#f7b596", "#f2916a", "#eb6834", "#c24f22"]
+
+    def col(v):
+        q = min(1.0, abs(v) / bound)
+        ramp = NEG if v < 0 else POS
+        k = int(round(q * (len(ramp) - 1)))
+        return ramp[k], ("white" if q > 0.75 else C.INK)
+
+    def thr_txt(x):
+        return f"{x:.3e}" if 0 < abs(x) < 1e-3 else f"{x:.4g}"
+
+    BIN = {"fallback": ("폴백 아님", "폴백"), "has_lead49": ("앞차 없음", "앞차 있음"),
+           "coverage": ("커버리지 실패", "커버리지 있음")} | {f"cls_{c}": (f"상황 ≠ {c}", f"상황 = {c}") for c in C.CLASSES}
+
+    def edge_labels(nm, th):
+        if nm in BIN:
+            return BIN[nm]
+        if nm == "v0" and th < 0.05:
+            return "v0 = 0 (정지 출발)", "v0 > 0"
+        return f"{labels[nm]} ≤ {thr_txt(th)}", f"{labels[nm]} > {thr_txt(th)}"
+
+    def simple_rule(rx):
+        """같은 특성의 조건을 합쳐 한 줄로 (lo < 특성 ≤ hi)."""
+        out, seen = [], []
+        for nm, _, _ in rx:
+            if nm not in seen:
+                seen.append(nm)
+        for nm in seen:
+            ups = [th for n2, op, th in rx if n2 == nm and op == "<="]
+            los = [th for n2, op, th in rx if n2 == nm and op == ">"]
+            if nm in BIN:
+                out.append(BIN[nm][1] if los else BIN[nm][0])
+            elif nm == "v0" and ups and min(ups) < 0.05 and not los:
+                out.append("v0 = 0")
+            elif nm == "v0" and los and max(los) < 0.05 and not ups:
+                out.append("v0 > 0")
+            else:
+                lab = labels[nm]
+                lo = (0.0 if nm == "v0" and max(los) < 0.05 else max(los)) if los else None
+                hi = min(ups) if ups else None
+                if lo is not None and hi is not None:
+                    out.append(f"{thr_txt(lo)} < {lab} ≤ {thr_txt(hi)}")
+                elif lo is not None:
+                    out.append(f"{lab} > {thr_txt(lo)}")
+                else:
+                    out.append(f"{lab} ≤ {thr_txt(hi)}")
+        return " · ".join(out)
+
+    def build(j, rule, rx):
+        st = stats[j]
+        fc, tc = col(st["mean_clip"])
+        leaf = t.children_left[j] == -1
+        nd = {"id": j, "rule": list(rule), "rule_exact": [list(z) for z in rx], "n": st["n"], "color": fc, "tc": tc,
+              "fs": 9.0 if leaf else 9.6,
+              "text": f"n={st['n']:,}\nΔ 평균 {st['mean']:+.3f} m\n{st['mid']:.2f} → {st['late']:.2f} m"
+                      + (f"\n검증30% {st['mean_test']:+.3f} ± {st['ci_test']:.3f}" if leaf else "")}
+        if not leaf:
+            nm = names[t.feature[j]]
+            th = float(t.threshold[j])
+            l_lab, r_lab = edge_labels(nm, th)
+            nd["children"] = [(l_lab, build(int(t.children_left[j]), rule + [l_lab], rx + ((nm, "<=", th),))),
+                              (r_lab, build(int(t.children_right[j]), rule + [r_lab], rx + ((nm, ">", th),)))]
+        return nd
+
+    root = build(0, [], ())
+    leaves = C.tree_leaves(root)
+    sids = df["sid"].to_numpy()
+    fb = df["fallback"].to_numpy()
+    sus = np.zeros(len(dy), bool) if suspect is None else np.asarray(suspect, bool)
+    out_leaves, check = [], []
+    for lf in leaves:
+        st = stats[lf["id"]]
+        rr = st["rows"]
+        cand = rr[~fb[rr] & ~sus[rr]] if (~fb[rr] & ~sus[rr]).any() else rr
+        rep = int(cand[np.argmin(np.abs(dy[cand] - st["median"]))])
+        m = np.ones(len(dy), bool)
+        for nm, op, th in lf["rule_exact"]:
+            cc = XM[:, names.index(nm)]
+            m &= (cc <= th) if op == "<=" else (cc > th)
+        check.append(bool(int(m.sum()) == st["n"] and abs(float(dy[m].mean()) - st["mean"]) < 1e-9))
+        out_leaves.append({"leaf": lf["id"], "rule": simple_rule(lf["rule_exact"]), "rule_path": " · ".join(lf["rule"]),
+                           "rule_exact": lf["rule_exact"],
+                           "n": st["n"], "mean": st["mean"], "median": st["median"], "mid": st["mid"],
+                           "late": st["late"], "share_better": st["share_better"], "share_worse": st["share_worse"],
+                           "n_test": st["n_test"], "mean_test": st["mean_test"], "ci_test": st["ci_test"],
+                           "value_train_clip": float(t.value[lf["id"]][0][0]),
+                           "rep_idx": rep, "rep_sid": str(sids[rep]), "rep_cls": str(df["cls"].iloc[rep]),
+                           "rep_dy": float(dy[rep])})
+    imp = sorted(zip(names, est.feature_importances_), key=lambda q: -q[1])
+    res = {"target": f"시나리오별 minADE6: 마지막 5 에폭({late[0]}–{late[-1]}) 평균 − 에폭 {mid[0]}–{mid[-1]} 평균 [m] "
+                     "(음수 = 뒤반에 좋아짐). 학습은 p1–p99 로 자른 값",
+           "clip": [float(lo), float(hi)], "depth": LT_DEPTH, "min_leaf": LT_LEAF, "seed": LT_SEED,
+           "r2_train": float(r2_tr), "r2_test": float(r2_te),
+           "mean_dy": float(dy.mean()), "corr_mid_level_vs_dy": float(np.corrcoef(y_mid, dy)[0, 1]),
+           "importance": [(labels[n], float(v)) for n, v in imp if v > 0],
+           "leaves": out_leaves, "leaf_check_ok": all(check),
+           "note": "서술용 — 인과가 아니다. |Δh|·최대|a|·6초 이동·커버리지는 정답(미래)에서 온다. "
+                   "중간 오차가 큰 시나리오일수록 많이 줄어드는 평균으로의 회귀가 섞여 있다."}
+    # 그림
+    plt = C.setup_mpl()
+    n_leaf = len(leaves)
+    fig = plt.figure(figsize=(max(22, 2.9 * n_leaf), 15.5))
+    ax = fig.add_axes([0.005, 0.37, 0.99, 0.49])
+    C.draw_tree(ax, root, fontsize=10.0, edge_fs=9.6)
+    fig.suptitle(f"e6 · 뒤반 변화 결정 트리 — 시나리오별 minADE6 이 에폭 {mid[0]}–{mid[-1]} 평균 → {late[0]}–{late[-1]} 평균 "
+                 f"사이에 얼마나 변했나 (n={len(dy):,}) · {tag}", x=0.01, y=0.985, ha="left", fontsize=14.5)
+    fig.text(0.01, 0.948, f"sklearn DecisionTreeRegressor · 깊이 {LT_DEPTH} · 잎 ≥ {LT_LEAF} · 학습 70% / 검증 30% (시드 {LT_SEED}) · "
+                          f"목표는 p1–p99 ({lo:+.2f} ~ {hi:+.2f} m) 로 잘라 학습 · 설명력 R² 학습 {r2_tr:.3f} / 검증 {r2_te:.3f} "
+                          f"(시나리오 하나하나의 변화는 거의 설명되지 않는다) · 전체 평균 Δ {dy.mean():+.3f} m",
+             fontsize=10.4, color=C.INK2)
+    fig.text(0.01, 0.925, "노드 글 = 그 칸 전체의 (자르지 않은) Δ 평균 · 에폭 11–15 → 마지막 5 에폭 minADE6 평균 · (잎) 검증 30% 평균 ± 95% 반폭.  "
+                          "색 = 자른 Δ 평균 (파랑 = 뒤반에 줄었다, 주황 = 늘었다).",
+             fontsize=10.2, color=C.INK2)
+    fig.text(0.01, 0.903, f"서술용 요약이지 인과가 아니다 — 뒤반에는 학습률 감소와 추가 학습이 함께 있다 (대조 학습 없음). "
+                          f"에폭 11–15 오차가 큰 시나리오일수록 Δ 가 음수로 크다 (상관 {res['corr_mid_level_vs_dy']:+.2f}): "
+                          "평균으로의 회귀와 '어려운 칸이 뒤늦게 줄었다' 가 섞여 있다.",
+             fontsize=10.2, color=C.INK2)
+    axt = fig.add_axes([0.01, 0.045, 0.98, 0.3])
+    axt.axis("off")
+    cols = ["잎", "규칙 (같은 특성은 합침)", "n", "Δ 평균 / 중앙 [m]", "11–15 → 뒤반 [m]", "줄어듦 / 늘어남 (|Δ|>0.1)",
+            "검증 30% Δ ± 95%", "대표 시나리오 (중앙값에 가장 가까운)"]
+    cells = []
+    for r in out_leaves:
+        cells.append([str(r["leaf"]), r["rule"], f"{r['n']:,}", f"{r['mean']:+.3f} / {r['median']:+.3f}",
+                      f"{r['mid']:.2f} → {r['late']:.2f}", f"{r['share_better'] * 100:.0f}% / {r['share_worse'] * 100:.0f}%",
+                      f"{r['mean_test']:+.3f} ± {r['ci_test']:.3f}", f"{r['rep_sid'][:8]} · {r['rep_cls']} · Δ {r['rep_dy']:+.2f}"])
+    tb = axt.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                   colWidths=[0.035, 0.33, 0.06, 0.11, 0.1, 0.11, 0.11, 0.145])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(10.0)
+    tb.scale(1, 1.75)
+    for (rr, cc), cell in tb.get_celld().items():
+        cell.set_edgecolor(C.GRID)
+        if rr == 0:
+            cell.set_facecolor("#eef0f3")
+            cell.set_text_props(weight="bold")
+        elif cc == 3:
+            fc, tc = col(out_leaves[rr - 1]["mean"])
+            cell.set_facecolor(fc)
+            cell.set_text_props(color=tc)
+        if cc == 1 and rr > 0:
+            cell.set_text_props(ha="left")
+            cell._loc = "left"
+    note(fig, "특성: " + " · ".join(labels[n] for n in names if not n.startswith("cls_")) + " · 상황 9개(원-핫). "
+              "|Δh|·최대|a|·6초 이동·커버리지는 정답(미래)에서 온다. 대표 시나리오는 폴백·위치 기준 직진 의심 회전 라벨을 뺀 중에서 고름. "
+              "시드 1개 · 체크포인트 1벌이라 에폭 사이 흔들림과 구분하지 못한다.", fs=9.0)
+    C.savefig(fig, path)
+    print(f"[e6] 뒤반 트리 R² 학습 {r2_tr:.3f} 검증 {r2_te:.3f} · 잎 {n_leaf} · 대조 {'통과' if all(check) else '실패'}",
+          flush=True)
+    return res
+
+
 # --------------------------------------------------------------------------- 고정 시나리오 패널
 class PanelCtx:
-    def __init__(self, df, R, cache_dir, scen, panel_epochs):
+    def __init__(self, df, R, cache_dir, scen, panel_epochs, hz=10, extra=None, tag=""):
         from dataset_cached import CachedV4Dataset
         ds = CachedV4Dataset(cache_dir)
         self.df, self.R = df, R
-        self.cache = {k: ds.raw(k) for k in ("routes", "route_tan", "route_mask", "origin", "theta")}
+        self.cache = {k: ds.raw(k) for k in ("routes", "route_tan", "route_band", "route_len", "route_mask",
+                                             "origin", "theta")}
         self.z = scen
         self.row = {int(e): r for r, e in enumerate(scen["epochs"])}
         self.pe = [e for e in panel_epochs if e in self.row]
         self.ec = C.epoch_colors(self.pe)
+        self.hz = hz
+        self.tag = tag
+        self.extra = extra or {}          # {에폭: {"h","theta","d","band",...} (고정 시나리오, 6모드, 60스텝)}
         self._scene = {}
+        # 상황 분류 인공물 후보 (분류기는 그대로, 패널 제목에만 표시)
+        self.turn_straight, self.turn_alt = C.turn_straight_by_position(R["pos"], df["cls"].to_numpy())
+        pos = np.asarray(R["pos"], np.float64)
+        path6 = np.linalg.norm(np.diff(pos[:, C.OBS - 1:], axis=1), axis=2).sum(1)
+        turn = df["cls"].isin(["좌회전", "우회전"]).to_numpy()
+        self.turn_flat = turn & (np.abs(pos[:, -1, 1]) < 1.0) & (path6 >= 4.0) & ~self.turn_straight
+        self.dec_acc = (df["cls"] == "급감속").to_numpy() & (df["amax_f"].to_numpy() > C.ACC_A)
+
+    def artifact_note(self, i):
+        r = self.df.iloc[i]
+        if self.turn_straight[i]:
+            return (f"※ 분류 인공물 후보: '{r['cls']}' 라벨이지만 위치로는 직진(시작·끝 방향 차 {self.turn_alt[i]:+.0f}°)")
+        if self.turn_flat[i]:
+            e = self.R["pos"][i, -1]
+            return (f"※ 분류 인공물 후보: '{r['cls']}' 라벨(6초 Δh {r['dh6']:+.0f}°)이지만 끝점 ({e[0]:.1f}, {e[1]:+.1f}) m 로 "
+                    "거의 직진 — 정지 직전 방향 잡음이 Δh 를 만든 것으로 보인다")
+        if self.dec_acc[i]:
+            return (f"※ 경계 사례: '급감속'(최소 a {r['amin_f']:+.2f} m/s²)이지만 최대 a {r['amax_f']:+.2f} m/s² 로 "
+                    "급가속 임계도 넘는다")
+        return ""
+
+    def gt_route_frame(self, i):
+        """정답 기준 경로에서 정답의 (d, 밴드, 경로 접선각) — viz_v4_dump.raw_one 과 같은 계산."""
+        import lane_frame as lf
+        g = int(self.df["gt_route"].iloc[i])
+        ch = self.cache
+        rd = C.route_dict(ch["routes"][i, g], ch["route_tan"][i, g], ch["route_len"][i, g])
+        ln = float(ch["route_len"][i, g])
+        pos = np.asarray(self.R["pos"][i], np.float64)
+        s, d, _ = lf.to_frame(pos, rd)
+        bd = D._band_at(np.asarray(ch["route_band"][i, g], np.float64), ln, s)
+        tk = D._band_at(np.asarray(ch["route_tan"][i, g], np.float64), ln, s)
+        return d, bd, np.arctan2(tk[:, 1], tk[:, 0]), rd
+
+    def proj_gt(self, i, rd, traj):
+        """예측 궤적(60,2)을 정답 기준 경로에 투영한 d — 정답과 같게 과거 50스텝부터 잇는다."""
+        import lane_frame as lf
+        q = np.vstack([np.asarray(self.R["pos"][i, :C.OBS], np.float64), np.asarray(traj, np.float64)])
+        return lf.to_frame(q, rd)[1][C.OBS:]
 
     def scene(self, i):
         import viz_v4_cases as VC
@@ -915,10 +1291,13 @@ def draw_panel_map(ax, cx, j, i, compact=False):
                        length=2.2 if typ == "motorcyclist" else (11.0 if typ == "bus" else 4.6),
                        width=0.9 if typ == "motorcyclist" else (2.5 if typ == "bus" else 1.9))
     ax.plot(pos[:C.OBS, 0], pos[:C.OBS, 1], color=C.C_PAST, lw=2.2, zorder=10)
+    C.past_dots(ax, pos[:C.OBS], cx.hz, C.C_PAST, zorder=10.3)
     for e, tt, ww in trajs:
         col = cx.ec[e]
         if ww is not None:
+            C.origin_join(ax, ww[0], col, lw=1.4, zorder=10.6)
             ax.plot(ww[:, 0], ww[:, 1], color=col, lw=1.4, ls=(0, (3, 2)), zorder=11, path_effects=halo(1.4))
+        C.origin_join(ax, tt[0], col, lw=2.2, zorder=10.8)
         ax.plot(tt[:, 0], tt[:, 1], color=col, lw=2.2, zorder=12, path_effects=halo(2.2))
         ax.scatter(*tt[-1], s=26, color=col, edgecolors="white", linewidths=1.0, zorder=13)
     ax.plot(pos[C.OBS - 1:, 0], pos[C.OBS - 1:, 1], color=C.C_GT, lw=1.7, zorder=14)
@@ -938,17 +1317,22 @@ def draw_panel_map(ax, cx, j, i, compact=False):
 
 def map_legend(ax, cx, loc="upper left", fs=7.6, ncol=1):
     from matplotlib.lines import Line2D
-    hs = [Line2D([], [], color=C.C_PAST, lw=2.2), Line2D([], [], color=C.C_GT, lw=1.7, marker="s", ms=5)]
+    hs = [Line2D([], [], color=C.C_PAST, lw=2.2, marker="o", ms=3.5, mec=C.SURF),
+          Line2D([], [], color=C.C_GT, lw=1.7, marker="s", ms=5)]
     hs += [Line2D([], [], color=cx.ec[e], lw=2.2) for e in cx.pe]
     hs += [Line2D([], [], color=C.INK2, lw=1.4, ls=(0, (3, 2))), Line2D([], [], color=C.INK2, lw=1.3),
-           Line2D([], [], color=C.MUTED, lw=0.8, ls=(0, (3, 2)))]
-    labs = ["과거 5초", "정답 6초 (■ 끝)"] + [f"에폭 {e} 확률 1위 (● 끝)" for e in cx.pe]
-    labs += ["점선 = 그 에폭의 승자 (1위와 다를 때)", "정답 기준 경로", "다른 후보 경로"]
-    return ax.legend(hs, labs, loc=loc, fontsize=fs, frameon=True, facecolor="white", edgecolor=C.GRID,
-                     framealpha=0.92, ncol=ncol, handlelength=2.2)
+           Line2D([], [], color=C.MUTED, lw=0.8, ls=(0, (3, 2))), Line2D([], [], color=C.INK2, lw=0.9, ls=(0, (1.0, 1.4)))]
+    labs = ["과거 5초 (· 1초" + (" · ○ 2 Hz 입력 시점)" if cx.hz == 2 else ")"), "정답 6초 (■ 끝)"]
+    labs += [f"에폭 {e} 확률 1위 (● 끝)" for e in cx.pe]
+    labs += ["점선 = 그 에폭의 승자 (1위와 다를 때)", "정답 기준 경로", "다른 후보 경로", "원점 → 첫 예측점 (t = 0.1 s)"]
+    leg = ax.legend(hs, labs, loc=loc, fontsize=fs, frameon=True, facecolor="white", edgecolor=C.GRID,
+                    framealpha=0.92, ncol=ncol, handlelength=2.2)
+    leg.set_zorder(100)          # 지도 요소 위에
+    return leg
 
 
 def panel_figure(cx, j, pick, path):
+    """고정 시나리오 한 장: 지도(에폭별 1위·승자) | 모드 확률·요약표 | 시계열 6칸(v · a · h · θ · d · 앞차 거리, 필수 요건 1)."""
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
     from matplotlib.lines import Line2D
@@ -956,14 +1340,15 @@ def panel_figure(cx, j, pick, path):
     z, R, df = cx.z, cx.R, cx.df
     r_ = df.iloc[i]
     nd, g = int(r_["n_distinct"]), int(r_["gt_route"])
-    fig = plt.figure(figsize=(21, 10.2))
-    gs = GridSpec(2, 3, figure=fig, width_ratios=[1.2, 1.0, 1.0], height_ratios=[1.0, 1.0], left=0.012,
-                  right=0.99, top=0.86, bottom=0.07, wspace=0.2, hspace=0.42)
-    axm = fig.add_subplot(gs[:, 0])
+    fig = plt.figure(figsize=(27, 12.6))
+    gs = GridSpec(1, 3, figure=fig, width_ratios=[1.15, 0.95, 2.0], left=0.01, right=0.99, top=0.87, bottom=0.06,
+                  wspace=0.14)
+    axm = fig.add_subplot(gs[0, 0])
     draw_panel_map(axm, cx, j, i)
     map_legend(axm, cx)
+    mid = gs[0, 1].subgridspec(2, 1, hspace=0.32, height_ratios=[1.0, 1.1])
     # 모드 확률 막대
-    axp = fig.add_subplot(gs[0, 1])
+    axp = fig.add_subplot(mid[0])
     x = np.arange(6)
     alive = z["pn_alive"][cx.row[cx.pe[-1]], j]
     w = min(0.8 / max(len(cx.pe), 1), 0.16)
@@ -987,24 +1372,24 @@ def panel_figure(cx, j, pick, path):
     axp.set_ylim(0, max(top_v * 1.22, 0.05))
     axp.set_ylabel("모드 확률")
     axp.grid(axis="x", visible=False)
-    axp.set_title("모드 확률 — 막대 색 = 에폭 (왼쪽부터 에폭 순) · ★ = 그 에폭의 승자", loc="left", fontsize=10)
+    axp.set_title("모드 확률 — 막대 색 = 에폭 (왼쪽부터 에폭 순)\n★ = 그 에폭의 승자", loc="left", fontsize=10)
     # 에폭 요약 표
-    axt = fig.add_subplot(gs[1, 1])
+    axt = fig.add_subplot(mid[1])
     axt.axis("off")
     cols = ["에폭", "확률 1위 (확률)", "승자", "minADE6", "1위 ADE", "정답 경로 확률"]
     cells, colors = [], []
     for e in cx.pe:
         r = cx.row[e]
         t, wv = int(z["top1"][r, i]), int(z["winner"][r, i])
-        cells.append([f"{e}", f"m{t} · r{t % nd}  ({z['top1_prob'][r, i]:.2f})", f"m{wv} · r{wv % nd}",
+        cells.append([f"{e}", f"m{t} · r{t % nd} ({z['top1_prob'][r, i]:.2f})", f"m{wv} · r{wv % nd}",
                       f"{z['minade'][r, i]:.2f} m", f"{z['top1_ade'][r, i]:.2f} m",
                       f"{z['gt_prob'][r, i]:.2f}" + ("" if nd >= 2 else " (분기 1)")])
         colors.append(cx.ec[e])
     tb = axt.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
-                   colWidths=[0.08, 0.27, 0.16, 0.15, 0.15, 0.19])
+                   colWidths=[0.09, 0.27, 0.15, 0.15, 0.15, 0.19])
     tb.auto_set_font_size(False)
-    tb.set_fontsize(9)
-    tb.scale(1, 1.75)
+    tb.set_fontsize(8.6)
+    tb.scale(1, 1.7)
     for (rr, cc), cell in tb.get_celld().items():
         cell.set_edgecolor(C.GRID)
         cell.set_linewidth(0.6)
@@ -1020,47 +1405,107 @@ def panel_figure(cx, j, pick, path):
              f"구별 분기 {nd} · 정답 기준 경로 r{g} ({r_['gt_route_q']}) · 경로 커버리지 "
              f"{'있음' if r_['coverage'] else '실패'} · 앞차 "
              + (f"{r_['gap49']:.0f} m" if np.isfinite(r_['gap49']) else "없음")]
-    axt.text(0.0, 0.02, "\n".join(lines), transform=axt.transAxes, fontsize=8.8, color=C.INK2, va="bottom",
+    axt.text(0.0, 0.0, "\n".join(lines), transform=axt.transAxes, fontsize=8.6, color=C.INK2, va="bottom",
              linespacing=1.6)
-    # v, a
+    # 시계열 6칸
     t_ax, tp = C.T_AX, C.T_PRED
-    for rowi, (key, gtk, ylab) in enumerate((("v", "v_pos", "속도 v [m/s]"), ("a", "a_fld", "가속도 a [m/s²]"))):
-        ax = fig.add_subplot(gs[rowi, 2])
-        ax.axvspan(5.45, 6.0, color=C.GRID, alpha=0.8, lw=0, zorder=0)
+    d_g, bd_g, k_g, rd = cx.gt_route_frame(i)
+    lc = C.lc_interval(R["gt_d_g"][i], r_["cls"]) if "gt_d_g" in R else None
+    hg = np.asarray(R["h"][i], np.float64)
+    hg = hg - 2 * np.pi * np.round(hg[C.OBS - 1] / (2 * np.pi))
+    right = gs[0, 2].subgridspec(3, 2, hspace=0.46, wspace=0.18)
+    series = [("v", "속도 v [m/s] — 회색 띠 = 창 양 끝 램프(라벨 끝 0.5 s 인공 감속)"),
+              ("a", "가속도 a [m/s²] — 정답 = 속도 필드 평활의 변화율"),
+              ("h", "진행방향 h [°]"),
+              ("theta", "잔차각 θ [°] — 에폭 선은 자기 모드 경로 기준, 정답은 정답 경로 기준"),
+              ("d", "정답 경로 기준 횡오프셋 d [m] (+좌) — 에폭 선은 정답 경로에 투영, 청록 = 밴드"),
+              ("lead", "앞차 거리 [m] (경로 따라 중심 간)")]
+    have_extra = all(e in cx.extra for e in cx.pe)
+    for q, (key, ttl) in enumerate(series):
+        ax = fig.add_subplot(right[q // 2, q % 2])
         ax.axvline(0, color=C.INK2, lw=0.8, zorder=1)
-        ax.plot(t_ax, R[gtk][i], color=C.C_GT, lw=1.7, zorder=4)
+        C.shade_lc(ax, lc, label=(key == "d"))
+        if key in ("v", "a"):
+            ax.axvspan(5.45, 6.0, color=C.GRID, alpha=0.8, lw=0, zorder=0)
+            ax.axvspan(-4.9, -4.45, color=C.GRID, alpha=0.8, lw=0, zorder=0)
+        vals = []
         if key == "v":
+            ax.plot(t_ax, R["v_pos"][i], color=C.C_GT, lw=1.7, zorder=4, **C.step_kw())
             ax.plot(t_ax, R["v_fld"][i], color=C.MUTED, lw=1.1, ls=(0, (3, 2)), zorder=4)
-        vals = [R[gtk][i]]
-        for e in cx.pe:
-            r = cx.row[e]
-            t = int(z["top1"][r, i])
-            ys = z["pn_" + key][r, j, t]
-            ax.plot(tp, ys, color=cx.ec[e], lw=1.8, zorder=3)
-            vals.append(ys)
-        if key == "a":
+        elif key == "a":
+            ax.plot(t_ax, R["a_fld"][i], color=C.C_GT, lw=1.7, zorder=4, **C.step_kw())
+            vals.append(np.asarray(R["a_fld"][i], np.float64))
+        elif key == "h":
+            ax.plot(t_ax, np.degrees(hg), color=C.C_GT, lw=1.6, zorder=4, **C.step_kw())
+            vals.append(np.degrees(hg[5:]))
+        elif key == "theta":
+            th = np.degrees(C.wrap(hg - k_g))
+            th[np.asarray(R["v_fld"][i]) < C.MOVE_V] = np.nan
+            ax.plot(t_ax, th, color=C.C_GT, lw=1.3, zorder=4, **C.step_kw())
+        elif key == "d":
+            ax.plot(t_ax, bd_g[:, 0], color=C.C_BAND, lw=1.0, ls=(0, (4, 2)), zorder=2)
+            ax.plot(t_ax, -bd_g[:, 1], color=C.C_BAND, lw=1.0, ls=(0, (4, 2)), zorder=2)
+            ax.axhline(0, color=C.AXIS, lw=0.8)
+            ax.plot(t_ax, d_g, color=C.C_GT, lw=1.6, zorder=4, **C.step_kw())
+            vals += [d_g[C.OBS - 10:], bd_g[C.OBS:, 0], -bd_g[C.OBS:, 1]]
+        elif key == "lead":
+            ld = np.asarray(R["lead_dist"][i], np.float64)
+            if np.isfinite(ld).any():
+                ax.plot(t_ax, ld, color=C.C_LEAD, lw=1.6, zorder=4, **C.step_kw())
+                ax.set_ylim(0, min(C.LEAD_MAX_M, np.nanmax(ld) * 1.2 + 2))
+            else:
+                ax.text(0.5, 0.5, "앞차 없음", transform=ax.transAxes, ha="center", va="center", color=C.MUTED)
+        if key != "lead":
+            for e in cx.pe:
+                r = cx.row[e]
+                t = int(z["top1"][r, i])
+                if key in ("v", "a"):
+                    ys = z["pn_" + key][r, j, t]
+                elif key == "d":
+                    ys = cx.proj_gt(i, rd, z["pn_traj"][r, j, t])
+                elif not have_extra:
+                    continue
+                elif key == "h":
+                    hh = np.unwrap(np.asarray(cx.extra[e]["h"][j, t], np.float64))
+                    ys = np.degrees(hh - 2 * np.pi * np.round((hh[0] - hg[C.OBS - 1]) / (2 * np.pi)))
+                else:
+                    ys = np.degrees(np.asarray(cx.extra[e]["theta"][j, t], np.float64))
+                ax.plot(tp, ys, color=cx.ec[e], lw=1.7, zorder=3, **C.step_kw())
+                vals.append(np.asarray(ys, np.float64))
+        if key == "a" and vals:
             lim = max(2.0, min(9.0, 1.15 * float(np.nanmax(np.abs(np.concatenate(vals))))))
             ax.set_ylim(-lim, lim)
             ax.axhline(0, color=C.AXIS, lw=0.8)
+        if key == "d" and vals:
+            yy = np.concatenate(vals)
+            ax.set_ylim(max(-12, np.nanmin(yy) - 0.8), min(12, np.nanmax(yy) + 0.8))
+        if key == "h" and vals:
+            yy = np.concatenate(vals)
+            lo_, hi_ = float(np.nanmin(yy)), float(np.nanmax(yy))
+            pad = max(2.0, 0.08 * (hi_ - lo_))
+            ax.set_ylim(lo_ - pad, hi_ + pad)
         ax.set_xlim(-5, 6)
-        ax.set_ylabel(ylab)
-        ax.set_xlabel("시간 [s]  (0 = 예측 시작)")
-        ttl = ("확률 1위 모드의 속도 — 에폭별" if key == "v" else "확률 1위 모드의 가속도 — 에폭별")
-        ax.set_title(ttl, loc="left", fontsize=10)
+        ax.set_title(ttl, loc="left", fontsize=9.2)
+        if q >= 4:
+            ax.set_xlabel("시간 [s]  (0 = 예측 시작) · 점 = 0.1 s 스텝")
         if key == "v":
-            hs = [Line2D([], [], color=C.C_GT, lw=1.7), Line2D([], [], color=C.MUTED, lw=1.1, ls=(0, (3, 2)))]
-            ax.legend(hs, ["정답 (위치 차분)", "정답 (AV2 속도 필드·평활)"], loc="best", fontsize=7.8)
-            ax.text(5.72, 0.97, "라벨 끝\n인공 감속", transform=ax.get_xaxis_transform(), fontsize=6.8,
-                    color=C.INK2, ha="center", va="top")
-        else:
-            ax.legend([Line2D([], [], color=C.C_GT, lw=1.7)], ["정답 (속도 필드 평활)"], loc="best", fontsize=7.8)
+            hs = [Line2D([], [], color=C.C_GT, lw=1.7, marker="o", ms=C.STEP_MS_10HZ),
+                  Line2D([], [], color=C.MUTED, lw=1.1, ls=(0, (3, 2)))]
+            ax.legend(hs + [Line2D([], [], color=cx.ec[e], lw=1.7) for e in cx.pe],
+                      ["정답 (위치 차분)", "정답 (AV2 속도 필드·평활)"] + [f"에폭 {e} 확률 1위" for e in cx.pe],
+                      loc="best", fontsize=7.2, ncol=2)
     e0, e1 = cx.pe[0], cx.pe[-1]
-    fig.suptitle(f"[{pick['cls']} {pick['k']}] {pick['sid']}  ·  minADE6 에폭 {e0} {z['minade'][cx.row[e0], i]:.2f} → "
-                 f"에폭 {e1} {z['minade'][cx.row[e1], i]:.2f} m  ·  1위 ADE {z['top1_ade'][cx.row[e0], i]:.2f} → "
-                 f"{z['top1_ade'][cx.row[e1], i]:.2f} m", x=0.012, y=0.975, ha="left", fontsize=13.5)
-    fig.text(0.012, 0.915, f"고정 시나리오 (val 앞 {len(df):,} 중 상황 '{pick['cls']}' {pick['pool']:,}개에서 시드 {C.SEED} 무작위, "
-                           "폴백 제외). 지도 = 정규화 프레임(원점 = 현재 위치, x = 현재 진행방향).",
-             fontsize=9, color=C.INK2)
+    art = cx.artifact_note(i)
+    fig.suptitle(f"[{pick['cls']} {pick['k']}{' ※' if art else ''}] {pick['sid']}  ·  {cx.tag} (입력 {cx.hz} Hz)  ·  minADE6 에폭 {e0} "
+                 f"{z['minade'][cx.row[e0], i]:.2f} → 에폭 {e1} {z['minade'][cx.row[e1], i]:.2f} m  ·  1위 ADE "
+                 f"{z['top1_ade'][cx.row[e0], i]:.2f} → {z['top1_ade'][cx.row[e1], i]:.2f} m", x=0.01, y=0.985,
+                 ha="left", fontsize=13.5)
+    pn = int(pick.get("pool_n", len(df)))
+    sub = (f"고정 시나리오 (val 앞 {pn:,} 중 상황 '{pick['cls']}' {pick['pool']:,}개에서 시드 {C.SEED} 무작위, 폴백 제외). "
+           "지도 = 정규화 프레임(원점 = 현재 위치, x = 현재 진행방향)."
+           + (f" 지표 평가는 {pop_desc(len(df))}." if pn != len(df) else "")
+           + ("" if have_extra else " (h·θ 에폭 선 없음: 고정 시나리오 재추론을 건너뛰었다)"))
+    fig.text(0.01, 0.945, sub + ("\n" + art if art else ""), fontsize=9, color=C.INK2, va="top", linespacing=1.5)
     return C.savefig(fig, path)
 
 
@@ -1068,8 +1513,12 @@ def panel_overview(cx, picks, path):
     import matplotlib.pyplot as plt
     ncol = 4
     nrow = int(np.ceil(len(picks) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(4.6 * ncol, 4.9 * nrow + 0.9), squeeze=False)
-    fig.subplots_adjust(left=0.01, right=0.99, top=1 - 1.0 / (4.9 * nrow + 0.9), bottom=0.01, wspace=0.04,
+    arts = [f"{p['cls']} {p['k']} · {p['sid'][:8]}: {cx.artifact_note(p['idx'])[2:]}" for p in picks
+            if cx.artifact_note(p["idx"])]
+    foot = 0.2 * len(arts) + (0.15 if arts else 0.0)
+    H = 4.9 * nrow + 1.35 + foot
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.6 * ncol, H), squeeze=False)
+    fig.subplots_adjust(left=0.01, right=0.99, top=1 - 1.45 / H, bottom=0.01 + foot / H, wspace=0.04,
                         hspace=0.22)
     for ax in axes.flat[len(picks):]:
         ax.axis("off")
@@ -1078,14 +1527,17 @@ def panel_overview(cx, picks, path):
         i = p["idx"]
         draw_panel_map(ax, cx, j, i, compact=True)
         z = cx.z
-        ax.set_title(f"{p['cls']} {p['k']} · {p['sid'][:8]}\nminADE6 에폭{e0} {z['minade'][cx.row[e0], i]:.2f} → "
+        mark = " ※" if cx.artifact_note(i) else ""
+        ax.set_title(f"{p['cls']} {p['k']} · {p['sid'][:8]}{mark}\nminADE6 에폭{e0} {z['minade'][cx.row[e0], i]:.2f} → "
                      f"에폭{e1} {z['minade'][cx.row[e1], i]:.2f} m", fontsize=9.5)
     if len(picks) < nrow * ncol:
         map_legend(axes.flat[-1], cx, loc="center", fs=9)
     else:
         map_legend(axes.flat[0], cx, fs=6.8)
-    fig.suptitle(f"고정 시나리오 {len(picks)}개 — 에폭 {', '.join(map(str, cx.pe))} 의 확률 1위(실선)·승자(점선)",
-                 x=0.01, ha="left", fontsize=14)
+    fig.suptitle(f"고정 시나리오 {len(picks)}개 — 에폭 {', '.join(map(str, cx.pe))} 의 확률 1위(실선)·승자(점선) · "
+                 f"{cx.tag} (입력 {cx.hz} Hz)", x=0.01, y=1 - 0.35 / H, ha="left", va="top", fontsize=14)
+    if arts:
+        fig.text(0.01, 0.004, "※ " + "\n※ ".join(arts), fontsize=8.6, color=C.INK2, ha="left", va="bottom")
     return C.savefig(fig, path)
 
 
@@ -1180,6 +1632,8 @@ def main():
         torch.set_num_threads(a.threads)
     n_cache = json.loads((cache_dir / "meta.json").read_text())["n"]
     n = min(a.n_val, n_cache)
+    global N_CACHE
+    N_CACHE = n_cache
     figs, data_dir = fig_dir(tag, n, a.out_root)
     print(f"[run] {tag} · 에폭 {epochs} · val 앞 {n:,} ({cache_dir.name}) · {device}", flush=True)
 
@@ -1239,7 +1693,7 @@ def main():
 
     if not a.no_figs and len(epochs) >= 2:
         plt = C.setup_mpl()
-        pop = f"val 앞 {n:,} 시나리오 · 상황은 정답 기반(viz_v4_common 임계값) · 흐린 선 = 그 지표 모집단 n < {C.MIN_N}"
+        pop = f"{pop_desc(n)} 시나리오 · 상황은 정답 기반(viz_v4_common 임계값) · 흐린 선 = 그 지표 모집단 n < {C.MIN_N}"
         for fname, ttl, mets in (("e1_class_curves_accuracy", "상황별 지표 곡선 ① 정확도·모드 선택", METRICS[:6]),
                                  ("e2_class_curves_feasibility", "상황별 지표 곡선 ② 실현가능성·다양성", METRICS[6:])):
             fig_class_curves(res, epochs, n_cls, mets, f"{ttl} — {tag}, 에폭마다 한 점", pop, figs / f"{fname}.png",
@@ -1247,17 +1701,28 @@ def main():
         refs = []
         ref_tags = ([tag.replace("_2hz", "")] if "_2hz" in tag else []) if a.ref_tags == "auto" else \
             [t for t in a.ref_tags.split(",") if t]
-        for k, t in enumerate(ref_tags):
+        ref_tags = [t for t in ref_tags if C.run_history(t)[0]]
+        styles, rule = run_styles([tag] + ref_tags)
+        for t in ref_tags:
             h, src = C.run_history(t)
-            if h:
-                refs.append((t, h, C.SERIES[1 + k]))
-        fig_train_log(tag, hist, hist_src, refs, res, epochs, n, cfg, figs / "e3_train_log.png")
+            refs.append((t, h, *styles[t]))
+        fig_train_log(tag, hist, hist_src, refs, res, epochs, n, cfg, figs / "e3_train_log.png", styles=styles,
+                      rule=rule)
         if LO:
-            fig_learning_order(LO, res, epochs, figs / "e4_learning_order.png")
+            fig_learning_order(LO, res, epochs, figs / "e4_learning_order.png", tag=tag)
         if ED:
-            fig_end_decel(ED, epochs, panel_epochs, figs / "e5_end_decel.png")
+            fig_end_decel(ED, epochs, panel_epochs, figs / "e5_end_decel.png", tag=tag)
+        sus, _ = C.turn_straight_by_position(R["pos"], df["cls"].to_numpy())
+        summary["late_tree"] = late_tree(rows, df, epochs, R, figs / "e6_tree_late_change.png", suspect=sus, tag=tag)
         z = dict(np.load(data_dir / f"epoch_scen_n{n}.npz"))
-        cx = PanelCtx(df, R, cache_dir, z, panel_epochs)
+        extra, xchk = ({}, None)
+        if picks:
+            extra, xchk = panel_extra(tag, cfg, ckpts, panel_epochs, picks, cache_dir, device, data_dir, z)
+            if not xchk["ok"]:
+                print("[panel] 재추론이 저장된 결과와 다르다 — h·θ 에폭 선을 그리지 않는다", flush=True)
+                extra = {}
+        summary["panel_extra_check"] = xchk
+        cx = PanelCtx(df, R, cache_dir, z, panel_epochs, hz=C.input_hz(cfg.get("input")), extra=extra, tag=tag)
         for j, p in enumerate(picks):
             panel_figure(cx, j, p, figs / "panel" / f"{j + 1:02d}_{CLASS_FILE[p['cls']]}_{p['k']}_{p['sid'][:8]}.png")
             plt.close("all")

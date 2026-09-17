@@ -12,7 +12,9 @@ viz_v4_gallery.py - v4 모델이 실제로 낸 예측 궤적을 어두운 HD 맵
 
 칸 하나 = 지도(focal 정규화: t=0 위치가 원점, 진행방향 +x) + 과거 5초 + 정답 6초 + v4 예측 6모드.
   best of 6 = 끝점 오차 최소 모드(학습 WTA 의 승자와 같다). 나머지는 확률로 진하기·굵기. ▲ = 확률 1위 끝점.
-  예측선은 현재 위치(원점)에서 시작하게 t=0 점을 앞에 붙여 그린다(모델 출력은 t=0.1 s 부터).
+  예측선은 모델 출력(t=0.1 s 부터)만 실선으로 그리고, 원점 -> 첫 예측점은 가는 점선으로 잇는다
+  (캐시 (s0, d0) 결함으로 출발점이 차량에서 떨어진 모드가 '꺾인 선'처럼 보이지 않게). 과거에는 1 s 점,
+  2 Hz 입력 판은 입력 시점(0.5 s) 빈 원을 찍는다. 좌표 점검(coord_check)은 첫 예측점 − 정답 첫 점 < 0.5 m.
   선택: 후보 경로 중심선을 흐리게(--routes 1), v3 규칙 모델 예측을 흐린 점선으로(--v3 auto).
 
 v3 겹치기 (--v3 auto)
@@ -49,6 +51,8 @@ V3_REF = C.RUNS / "traj_lane_rules.npz"
 V3_N_CHECK = 64
 V3_TOL_M = 1e-3
 P_FULL = 0.5               # 이 확률 이상이면 가장 진하고 굵게
+COORD_TOL_M = 0.5          # 좌표 점검: 살아있는 모드의 첫 예측점(t=0.1 s)이 정답 첫 점에서 이보다 멀면 '확인 필요'
+                           # (정답 첫 스텝 이동은 p99 1.8 m 지만 모드 첫 점과 정답 첫 점의 차는 대부분 0.1 m 안이다)
 
 # ---------------------------------------------------------------- 색 (어두운 지도)
 # hdmap_render 색 계열을 한 단계 어둡게 두고, 흰 노면표시는 회색으로 낮춘다 — 흰 과거 궤적과 겹쳐 보이지 않게.
@@ -116,7 +120,8 @@ class Run:
         cache = CachedV4Dataset(self.meta["val_cache"])
         if list(cache.sids[:len(sids)]) != list(sids):
             raise SystemExit(f"[gallery] {tag}: 캐시 {cache.dir} 의 순서가 덤프와 다르다")
-        self.cache = {k: cache.raw(k) for k in ("routes", "route_mask", "origin", "theta")}
+        self.cache = {k: cache.raw(k) for k in ("routes", "route_mask", "origin", "theta", "route_tan", "route_len",
+                                                "route_sd0")}
         self._scene = {}
 
     @property
@@ -283,14 +288,26 @@ def coord_check(run, idxs):
         p0 = run.traj[i][al, 0].astype(np.float64)
         y0 = np.asarray(run.y[i, 0], np.float64)
         w = int(run.df["winner"].iloc[i])
-        rows.append({"idx": int(i), "gt_first_step_m": round(float(np.linalg.norm(y0)), 3),
+        ch = run.cache
+        # 모델과 무관한 캐시 시작 상태 복원점의 오프셋 (route_sd0 결함이면 0.5 m 를 넘는다)
+        so = C.start_offset(ch["routes"][i], ch["route_tan"][i], ch["route_len"][i], ch["route_sd0"][i])[al]
+        rows.append({"idx": int(i), "sid": str(run.df["sid"].iloc[i]),
+                     "gt_first_step_m": round(float(np.linalg.norm(y0)), 3),
                      "pred_first_step_m_max": round(float(np.linalg.norm(p0, axis=1).max()), 3),
                      "pred_first_vs_gt_first_m_max": round(float(np.linalg.norm(p0 - y0, axis=1).max()), 3),
-                     "best_first_vs_gt_first_m": round(float(np.linalg.norm(run.traj[i, w, 0] - y0)), 3)})
+                     "best_first_vs_gt_first_m": round(float(np.linalg.norm(run.traj[i, w, 0] - y0)), 3),
+                     "start_offset_m_max": round(float(so.max()), 3)})
+    worst = max(r["pred_first_vs_gt_first_m_max"] for r in rows)
+    ok = bool(past_end < 1e-5 and gt_join < 1e-5 and worst < COORD_TOL_M)
+    bad = [r for r in rows if r["pred_first_vs_gt_first_m_max"] >= COORD_TOL_M]
+    cause = ""
+    if bad:
+        cache_def = [r for r in bad if r["start_offset_m_max"] >= COORD_TOL_M]
+        cause = (f"첫 점이 정답 첫 점에서 {COORD_TOL_M:g} m 넘게 떨어진 시나리오 {len(bad)}개 중 {len(cache_def)}개는 "
+                 f"캐시 시작 상태(route_sd0) 복원점이 이미 {COORD_TOL_M:g} m 넘게 벗어나 있다 — 그림 좌표가 아니라 "
+                 "전처리 결함(docs/v4_viz_cos30.md 7절)")
     return {"past_end_abs_max_m": past_end, "pos_future_vs_y_max_m": gt_join,
-            "pred_first_vs_gt_first_m_max": max(r["pred_first_vs_gt_first_m_max"] for r in rows),
-            "ok": bool(past_end < 1e-5 and gt_join < 1e-5
-                       and max(r["pred_first_vs_gt_first_m_max"] for r in rows) < 1.0),
+            "pred_first_vs_gt_first_m_max": worst, "tol_first_m": COORD_TOL_M, "ok": ok, "cause": cause,
             "rows": rows}
 
 
@@ -557,7 +574,8 @@ def def_lines(past_view_s, compare=False):
     l2 = ("경로후보 = 지도에서 열거한 구별되는 후보 경로 수(≤6, 6모드가 나눠 탐)  ·  best = 끝점 오차 최소 모드  ·  "
           "1위 = 확률 최대 모드  ·  (밴드) 이탈 k/6 = 60스텝 중 한 스텝이라도 규칙 밴드 밖인 모드 수")
     l3 = (f"좌표 = focal 정규화(t=0 위치 원점, 진행방향 +x)  ·  시야 = 과거 마지막 {past_view_s:g}초 + 정답 + 예측"
-          f"(최소 {MIN_SPAN_M:g} m, 그 앞 과거는 잘릴 수 있음)  ·  예측선은 원점에서 시작하게 그렸다(모델 출력은 t=0.1 s 부터)")
+          f"(최소 {MIN_SPAN_M:g} m, 그 앞 과거는 잘릴 수 있음)  ·  원점 → 첫 예측점(t = 0.1 s)은 가는 점선 "
+          "(모델 출력은 t = 0.1 s 부터 — 캐시 출발점 결함이 있는 모드는 첫 점이 차량에서 떨어져 있다)")
     l4 = ("▲ = 확률 1위 모드의 끝점 (칸 제목 괄호 = 그 확률)  ·  모델마다 시드 1개" if compare else
           f"나머지 모드: 확률 {P_FULL:g} 이상이면 가장 진하고 굵게  ·  시드 1개")
     return [l1, l2, l3, l4]
@@ -587,21 +605,26 @@ def gallery_panel(ax, run, i, pw, v3=None, routes=True, past_view_s=PAST_VIEW_S)
                 ax.plot(rp[:, 0], rp[:, 1], color=C_ROUTE, lw=7.0, alpha=0.11, solid_capstyle="round", zorder=5)
     if v3 is not None:
         for m in range(v3.shape[0]):
-            t = with_origin(v3[m])
+            t = np.asarray(v3[m], np.float64)
             ax.plot(t[:, 0], t[:, 1], color=C_V3, lw=1.2, ls=(0, (2.0, 2.0)), alpha=0.6, zorder=6)
     C.draw_box(ax, 0, 0, 0, C_FOCAL, zorder=7, ec="white", lw=1.0)
     ax.plot(past[:, 0], past[:, 1], color=C_PAST, lw=2.6, zorder=10, path_effects=_pe(2.6))
+    C.past_dots(ax, past, C.input_hz(run.inp), C_PAST, zorder=10.5, dark=True)
     for m in np.argsort(prob):
         if not al[m] or m == win:
             continue
         a, lw = p_style(prob[m])
-        t = with_origin(tr[m])
+        t = tr[m]
+        C.origin_join(ax, t[0], C_OTHER, lw=lw, zorder=10.8, alpha=0.5 * a + 0.3)
         ax.plot(t[:, 0], t[:, 1], color=C_OTHER, lw=lw, alpha=a, zorder=11, solid_capstyle="round")
         ax.scatter(*t[-1], s=12 + 10 * lw, color=C_OTHER, alpha=a, lw=0, zorder=11)
     ax.plot(gt[:, 0], gt[:, 1], color=C_GT, lw=3.4, zorder=12, path_effects=_pe(3.4))
+    ax.scatter(gt[10:-1:10, 0], gt[10:-1:10, 1], s=18, color=C_GT, edgecolors=OUTLINE, linewidths=0.8, zorder=12.4)
     ax.scatter(*gt[-1], s=46, color=C_GT, edgecolors=OUTLINE, linewidths=1.1, zorder=12.5)
-    b = with_origin(tr[win])
+    b = tr[win]
+    C.origin_join(ax, b[0], C_BEST, lw=2.7, zorder=12.8)
     ax.plot(b[:, 0], b[:, 1], color=C_BEST, lw=2.7, ls=(0, (3.0, 1.9)), zorder=13, path_effects=_pe(2.7))
+    ax.scatter(b[9::10, 0], b[9::10, 1], s=14, color=C_BEST, edgecolors=OUTLINE, linewidths=0.6, zorder=13.2)
     mark_top(ax, tr[top, -1], f"1위{'=best' if top == win else ''} {prob[top]:.2f}", C_TOP, xlim)
     finish_axes(ax, xlim, ylim)
     panel_title(ax, [title_line1(r, inter),
@@ -610,16 +633,17 @@ def gallery_panel(ax, run, i, pw, v3=None, routes=True, past_view_s=PAST_VIEW_S)
     return inter
 
 
-def gallery_handles(v3_on, routes_on):
+def gallery_handles(v3_on, routes_on, hz2=False):
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    h = [Line2D([], [], color=C_PAST, lw=2.6), Line2D([], [], color=C_GT, lw=3.4, marker="o", ms=6, mec=OUTLINE),
+    h = [Line2D([], [], color=C_PAST, lw=2.6, marker="o", ms=3.5, mec=OUTLINE),
+         Line2D([], [], color=C_GT, lw=3.4, marker="o", ms=6, mec=OUTLINE),
          Line2D([], [], color=C_BEST, lw=2.7, ls=(0, (3.0, 1.9))),
          Line2D([], [], color=C_OTHER, lw=4.0), Line2D([], [], color=C_OTHER, lw=1.1, alpha=0.3),
          Line2D([], [], color=C_TOP, marker="^", ms=11, ls="none", mec=OUTLINE),
          Patch(facecolor=C_FOCAL, edgecolor="white")]
-    lab = ["과거 5초 (관측)", "실제 차량이 간 길 (정답 6초, ● 끝점)",
-           "v4 예측 · best of 6 (정답 끝점에 가장 가까운 모드)",
+    lab = ["과거 5초 (관측, · 1초 점" + (" · ○ 2 Hz 입력 시점)" if hz2 else ")"), "실제 차량이 간 길 (정답 6초, · 1초 점 · ● 끝점)",
+           "v4 예측 · best of 6 (정답 끝점에 가장 가까운 모드, · 1초 점)",
            "v4 예측 · 나머지 5개 — 확률 높음: 진하고 굵게", "v4 예측 · 나머지 5개 — 확률 낮음: 흐리고 가늘게",
            "확률 1위 모드의 끝점 (숫자 = 확률)", "focal 차량 (t = 0 s)"]
     if routes_on:
@@ -628,12 +652,14 @@ def gallery_handles(v3_on, routes_on):
     if v3_on:
         h.append(Line2D([], [], color=C_V3, lw=1.2, ls=(0, (2.0, 2.0)), alpha=0.8))
         lab.append("v3 규칙 모델 예측 6개 (비교용, lane_rules_s0)")
+    h.append(Line2D([], [], color=TXT2, lw=1.0, ls=(0, (1.0, 1.4))))
+    lab.append("원점 → 첫 예측점 (t = 0.1 s, 가는 점선)")
     return h, lab
 
 
 def draw_gallery(run, idxs, rule, info, out, dpi, v3=None, routes=True, past_view_s=PAST_VIEW_S):
     v3_on = v3 is not None
-    legend_rows = int(np.ceil((7 + int(routes) + int(v3_on)) / 3))
+    legend_rows = int(np.ceil((8 + int(routes) + int(v3_on)) / 3))
     header_in = 0.28 + 0.52 + 0.30 * 3 + 0.12 + 0.34 * legend_rows + 0.45
     foot = def_lines(past_view_s)
     if v3_on:
@@ -644,12 +670,12 @@ def draw_gallery(run, idxs, rule, info, out, dpi, v3=None, routes=True, past_vie
               for ax, i in zip(axes, idxs)]
     n = info["n"] if rule == "mean" else info["pool"]
     if rule == "mean":
-        title = "v4 예측 궤적 — 평균 사례 (평균값 기준)"
+        title = f"v4 예측 궤적 — 평균 사례 (평균값 기준) · {run.tag} · {run.short} 입력"
         s1 = (f"모집단 val {n:,}  ·  평균 minADE6 {info['mean_ade']:.3f} m (표준편차 {info['sd_ade']:.3f})  ·  "
               f"평균 minFDE6 {info['mean_fde']:.3f} m (표준편차 {info['sd_fde']:.3f})  ·  "
               "거리 = |ADE−평균|/σ + |FDE−평균|/σ 가 가장 작은 9개 (칸 순서 = 거리 순)")
     else:
-        title = "v4 예측 궤적 — 평균 사례 (중앙값 기준)"
+        title = f"v4 예측 궤적 — 평균 사례 (중앙값 기준) · {run.tag} · {run.short} 입력"
         s1 = (f"모집단 val {n:,}{' (앞 ' + format(n, ',') + '개)' if n < len(run.df) else ''}  ·  "
               f"minFDE6 오름차순 {info['rank_from1'][0]:,}~{info['rank_from1'][1]:,}번째 (가운데 9개)  ·  "
               f"중앙값 minFDE6 {info['median_fde']:.3f} m · minADE6 {info['median_ade']:.3f} m  ·  "
@@ -657,7 +683,7 @@ def draw_gallery(run, idxs, rule, info, out, dpi, v3=None, routes=True, past_vie
     s2 = f"모델 {run.tag}  —  {run.desc()}"
     s3 = composition(run, idxs, inters)
     y = header(fig, W, H, title, [s1, s2, s3])
-    h, lab = gallery_handles(v3_on, routes)
+    h, lab = gallery_handles(v3_on, routes, hz2=C.input_hz(run.inp) == 2)
     legend(fig, W, H, y - 0.10, h, lab, ncol=3)
     footer(fig, H, foot)
     C.savefig(fig, out, dpi=dpi)
@@ -684,16 +710,22 @@ def compare_panel(ax, ra, rb, i, pw, past_view_s=PAST_VIEW_S):
     draw_map_dark(ax, scene, xlim, ylim)
     C.draw_box(ax, 0, 0, 0, C_FOCAL, zorder=7, ec="white", lw=1.0)
     ax.plot(past[:, 0], past[:, 1], color=C_PAST, lw=2.6, zorder=10, path_effects=_pe(2.6))
+    hz2 = 2 in (C.input_hz(ra.inp), C.input_hz(rb.inp))
+    C.past_dots(ax, past, 2 if hz2 else 10, C_PAST, zorder=10.5, dark=True)
     # 정답은 굵게 밑에 깐다 — 예측이 겹쳐도 파란 테두리로 보인다
     ax.plot(gt[:, 0], gt[:, 1], color=C_GT, lw=5.6, zorder=12, path_effects=_pe(5.6))
+    ax.scatter(gt[10:-1:10, 0], gt[10:-1:10, 1], s=26, color=C_GT, edgecolors=OUTLINE, linewidths=0.8, zorder=12.4)
     ax.scatter(*gt[-1], s=70, color=C_GT, edgecolors=OUTLINE, linewidths=1.1, zorder=12.5)
     # 실선(첫 판)을 먼저, 점선(둘째 판)을 위에 — 겹치면 점선 틈으로 실선이 보인다
     for T, w, t, col, ls, z in ((A, wa, ta, C_A, "-", 14), (B, wb, tb, C_B, LS_B, 16)):
         if t != w:
-            u = with_origin(T[t])
+            u = T[t]
+            C.origin_join(ax, u[0], col, lw=1.6, zorder=z - 0.2)
             ax.plot(u[:, 0], u[:, 1], color=col, lw=1.6, ls=ls, zorder=z, path_effects=_pe(1.6, 1.5))
-        u = with_origin(T[w])
+        u = T[w]
+        C.origin_join(ax, u[0], col, lw=2.8, zorder=z + 0.3)
         ax.plot(u[:, 0], u[:, 1], color=col, lw=2.8, ls=ls, zorder=z + 0.5, path_effects=_pe(2.8, 1.5))
+        ax.scatter(u[9::10, 0], u[9::10, 1], s=16, color=col, edgecolors=OUTLINE, linewidths=0.6, zorder=z + 0.6)
         mark_top(ax, T[t, -1], "", col, xlim, size=120)
     finish_axes(ax, xlim, ylim)
 
@@ -726,12 +758,14 @@ def draw_compare(ra, rb, idxs, sta, stb, out, dpi, past_view_s=PAST_VIEW_S):
     s3 = (f"칸마다 두 판의 best of 6 (굵은 선)과 확률 1위 (가는 선 · ▲ 끝점) 만 그렸다  ·  1위 = best 면 굵은 선 끝에 ▲"
           f"   |   {composition(ra, idxs, inters)}")
     y = header(fig, W, H, title, [s1, s2, s3])
-    h = [Line2D([], [], color=C_PAST, lw=2.6), Line2D([], [], color=C_GT, lw=5.6, marker="o", ms=7, mec=OUTLINE),
+    h = [Line2D([], [], color=C_PAST, lw=2.6, marker="o", ms=3.5, mec=OUTLINE),
+         Line2D([], [], color=C_GT, lw=5.6, marker="o", ms=7, mec=OUTLINE),
          Patch(facecolor=C_FOCAL, edgecolor="white"),
          Line2D([], [], color=C_A, lw=2.8), Line2D([], [], color=C_A, lw=1.6, marker="^", ms=10, mec=OUTLINE),
          Line2D([], [], color=C_B, lw=2.8, ls=LS_B),
          Line2D([], [], color=C_B, lw=1.6, ls=LS_B, marker="^", ms=10, mec=OUTLINE)]
-    lab = ["과거 5초 (관측)", "실제 차량이 간 길 (정답 6초 · 굵게 밑에 깔았다, ● 끝점)", "focal 차량 (t = 0 s)",
+    lab = ["과거 5초 (관측, · 1초 점 · ○ 2 Hz 판 입력 시점)", "실제 차량이 간 길 (정답 6초 · 굵게 밑에 깔았다, · 1초 점 · ● 끝점)",
+           "focal 차량 (t = 0 s)",
            f"{ra.short} 판 · best of 6 (실선, 굵게)", f"{ra.short} 판 · 확률 1위 (실선, 가늘게 · ▲ 끝점)",
            f"{rb.short} 판 · best of 6 (점선, 굵게)", f"{rb.short} 판 · 확률 1위 (점선, 가늘게 · ▲ 끝점)"]
     # matplotlib 범례는 열 우선으로 [3, 2, 2] 개씩 채운다 -> 공통 | 첫 판 | 둘째 판
@@ -833,7 +867,8 @@ def main():
                                 "made": time.strftime("%Y-%m-%d %H:%M:%S")}
         print(f"[gallery] {out}  지표 대조 {'통과' if mc['ok'] else '실패'} (최대 차 {mc['max_abs_diff_m']:.2e} m) · "
               f"좌표 {'통과' if cc['ok'] else '확인 필요'} (과거 끝 {cc['past_end_abs_max_m']:.1e} m, "
-              f"예측 첫 점−정답 첫 점 최대 {cc['pred_first_vs_gt_first_m_max']:.2f} m)", flush=True)
+              f"예측 첫 점−정답 첫 점 최대 {cc['pred_first_vs_gt_first_m_max']:.2f} m)"
+              + (f"\n  └ {cc['cause']}" if cc["cause"] else ""), flush=True)
         for rw_ in rows:
             print(f"  {rw_['sid'][:8]} {rw_['cls']:<5} ADE {rw_['minade']:.2f} FDE {rw_['minfde']:.2f} | {rw_['summary']}",
                   flush=True)
@@ -856,11 +891,14 @@ def main():
             "picks_from": f"{a.tag} 평균값 기준", "picks": rows, "past_view_s": a.past_view,
             "args_diff": {k: [run.args.get(k), rb.args.get(k)] for k in args_diff(run, rb)},
             "metric_check": {run.short: metric_check(run, mean_idx), rb.short: metric_check(rb, mean_idx)},
-            "coord_check": {rb.short: coord_check(rb, mean_idx)},
+            "coord_check": {run.short: coord_check(run, mean_idx), rb.short: coord_check(rb, mean_idx)},
             "made": time.strftime("%Y-%m-%d %H:%M:%S")}
         mcb = rec["figures"]["compare_avg_mean"]["metric_check"][rb.short]
         print(f"[compare] {out}  {rb.short} 지표 대조 {'통과' if mcb['ok'] else '실패'} "
               f"(최대 차 {mcb['max_abs_diff_m']:.2e} m)", flush=True)
+        for nm_, cc_ in rec["figures"]["compare_avg_mean"]["coord_check"].items():
+            print(f"  좌표 {nm_} {'통과' if cc_['ok'] else '확인 필요'} (첫 점 최대 {cc_['pred_first_vs_gt_first_m_max']:.2f} m)"
+                  + (f" └ {cc_['cause']}" if cc_["cause"] else ""), flush=True)
         for rw_ in rows:
             fa, fb = rw_[run.short], rw_[rb.short]
             print(f"  {rw_['sid'][:8]} {fa['cls']:<5} {run.short}: {fa['summary']}\n"

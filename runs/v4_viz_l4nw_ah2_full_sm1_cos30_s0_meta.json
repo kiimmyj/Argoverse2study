@@ -1,0 +1,111 @@
+{
+  "tag": "v4_l4nw_ah2_full_sm1_cos30_s0",
+  "model": {
+    "in_dim": 2,
+    "lane_in": 30,
+    "th0": "guard",
+    "offlane": 1.0,
+    "off_nonwinner": true,
+    "smooth": 1.0,
+    "input": "ah2",
+    "fallback": "straight1",
+    "train_n": 199908
+  },
+  "device": "cuda",
+  "val_cache": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
+  "n": 24988,
+  "git_head": "97546c3072e3f8f8e3d61bc8b1dd677f4f8b7399",
+  "seed": 0,
+  "repro": {
+    "got": {
+      "n": 24988,
+      "minADE6": 1.4016396652610867,
+      "minFDE6": 3.279349298317462,
+      "offlane": 0.5215476967265544,
+      "dtheta_over_label_pct": 1.029802718998533,
+      "jitter_theta": 0.0010870738923585853,
+      "jitter_a": 0.0018306394759150186
+    },
+    "expected": {
+      "n": 24988,
+      "minADE6": 1.4016396644040263,
+      "minFDE6": 3.279349295639202,
+      "offlane": 0.5215476762179174,
+      "dtheta_over_label_pct": 1.029802718998533,
+      "jitter_theta": 0.0010870738911966389,
+      "jitter_a": 0.0018306394737576076
+    },
+    "ok": true,
+    "abs_diff": {
+      "minADE6": 8.570604226321166e-10,
+      "minFDE6": 2.6782602802200017e-09,
+      "offlane": 2.050863701086314e-08,
+      "dtheta_over_label_pct": 0.0,
+      "jitter_theta": 1.161946407146619e-12,
+      "jitter_a": 2.157410968622875e-12
+    }
+  },
+  "loss_weights": {
+    "offlane": 1.0,
+    "smooth": 1.0,
+    "hinge": "버려진 모드만"
+  },
+  "thresholds": {
+    "CLASSES": [
+      "정지",
+      "좌회전",
+      "우회전",
+      "좌차선변경",
+      "우차선변경",
+      "급감속",
+      "급가속",
+      "정속",
+      "기타"
+    ],
+    "STOP_VMAX": 1.0,
+    "TURN_DEG": 30.0,
+    "LC_MAX_DEG": 15.0,
+    "LC_LAT_M": 2.5,
+    "LC_MAX_ABS_D": 5.0,
+    "LC_MIN_MOVE": 10.0,
+    "ROUTE_ALIGN_DEG": 30.0,
+    "MOVE_V": 1.0,
+    "DEC_A": -3.0,
+    "ACC_A": 2.5,
+    "CONST_DV": 1.5,
+    "CONST_V0": 2.0,
+    "MED_K": 5,
+    "SG_WIN": 15,
+    "SG_POLY": 2,
+    "HEAD_AVG": 3,
+    "LEAD_TYPES": [
+      "VEHICLE",
+      "BUS",
+      "MOTORCYCLIST"
+    ],
+    "LEAD_LAT_M": 1.8,
+    "LEAD_MIN_M": 2.5,
+    "LEAD_MAX_M": 80.0,
+    "LEAD_HEAD_DEG": 45.0,
+    "LEAD_EXT_M": 100.0,
+    "PATH_STEP_M": 1.0,
+    "THW_MIN_V": 0.5,
+    "MISS_M": 2.0,
+    "MIN_N": 50
+  },
+  "class_counts": {
+    "정지": 657,
+    "좌회전": 2065,
+    "우회전": 1872,
+    "좌차선변경": 218,
+    "우차선변경": 278,
+    "급감속": 900,
+    "급가속": 2859,
+    "정속": 5289,
+    "기타": 10850
+  },
+  "sec": {
+    "total": 140.533518075943,
+    "raw": 125.74538278579712
+  }
+}

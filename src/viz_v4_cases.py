@@ -60,7 +60,12 @@ class Ctx:
         self.P = {k: self.pred[k] for k in ("traj", "prob", "a", "theta", "v", "d", "h", "ade", "fde",
                                             "hinge", "jit", "alive")}
         self.R = {k: self.raw[k] for k in ("pos", "v_pos", "v_fld", "a_fld", "h", "lead_dist",
-                                           "lead_track", "gt_d_w", "gt_band_w", "gt_k_w")}
+                                           "lead_track", "gt_d_w", "gt_band_w", "gt_k_w", "gt_d_g")}
+        self.tag = tag
+        self.inp = C.run_config(tag)[0].get("input", "ah2")
+        self.hz = C.input_hz(self.inp)
+        # 상황 분류 인공물 후보 (분류기는 그대로 두고 칸 제목에만 ※ 로 표시한다)
+        self.turn_straight, self.turn_alt = C.turn_straight_by_position(self.raw["pos"], self.df["cls"].to_numpy())
         ds = CachedV4Dataset(self.meta.get("val_cache", C.VAL_CACHE))   # 덤프가 쓴 캐시 (경로 필드는 두 캐시가 같다)
         self.cache = {k: ds.raw(k) for k in ("routes", "route_tan", "route_band", "route_len",
                                              "route_mask", "origin", "theta")}
@@ -160,9 +165,12 @@ def draw_map(ax, cx, i, compact=False):
             C.draw_box(ax, *lt[C.OBS - 1], np.arctan2(v[1], v[0]) if np.linalg.norm(v) > 0.05 else 0.0,
                        C.C_LEAD, zorder=10)
 
-    # 과거·정답
+    # 과거·정답 (과거: 1 s 점 + 2 Hz 판이면 입력 시점 빈 원 / 정답: 1 s 점)
     ax.plot(pos[:C.OBS, 0], pos[:C.OBS, 1], color=C.C_PAST, lw=2.2, zorder=11)
+    C.past_dots(ax, pos[:C.OBS], cx.hz, C.C_PAST, zorder=11.2)
     ax.plot(pos[C.OBS - 1:, 0], pos[C.OBS - 1:, 1], color=C.C_GT, lw=2.2, zorder=14)
+    ax.scatter(pos[C.OBS + 9:-1:10, 0], pos[C.OBS + 9:-1:10, 1], s=12, color=C.C_GT, zorder=14.5,
+               edgecolors=C.SURF, linewidths=0.6)
     ax.scatter(*pos[-1], s=22, color=C.C_GT, zorder=15, edgecolors=C.SURF, linewidths=1.2)
 
     # 예측 6모드 — 확률 낮은 것부터 그려 높은 것이 위에 오게
@@ -170,6 +178,7 @@ def draw_map(ax, cx, i, compact=False):
         if not al[m]:
             continue
         t = traj[m]
+        C.origin_join(ax, t[0], C.prob_color(prob[m]), lw=0.8 + 3.0 * prob[m], zorder=11.8)
         ax.plot(t[:, 0], t[:, 1], color=C.prob_color(prob[m]), lw=0.8 + 3.0 * prob[m], zorder=12,
                 solid_capstyle="round")
         if not compact:
@@ -177,6 +186,7 @@ def draw_map(ax, cx, i, compact=False):
                     clip_on=True)
     tw = traj[win]
     ax.plot(tw[:, 0], tw[:, 1], color=C.C_WIN, lw=1.1, ls=(0, (3, 2)), zorder=13)
+    ax.scatter(tw[9:-1:10, 0], tw[9:-1:10, 1], s=10, color=C.C_WIN, edgecolors=C.SURF, linewidths=0.5, zorder=13.2)
     ax.scatter(*tw[-1], marker="*", s=150 if not compact else 90, color=C.C_WIN, edgecolors=C.INK,
                linewidths=0.6, zorder=18)
     tt = traj[top]
@@ -191,21 +201,31 @@ def draw_map(ax, cx, i, compact=False):
         s.set_visible(True); s.set_color(C.AXIS)
 
 
-def map_legend(ax, loc="upper left", fontsize=7.5, ncol=1):
+def map_legend(ax, loc="upper left", fontsize=7.5, ncol=1, hz=10):
+    h, lab = legend_items(hz)
+    leg = ax.legend(h, lab, loc=loc, fontsize=fontsize, frameon=True, facecolor="white",
+                    edgecolor=C.GRID, framealpha=0.92, handlelength=2.2, ncol=ncol)
+    leg.set_zorder(100)          # 지도 요소(상자·경로·밴드) 위에
+    return leg
+
+
+def legend_items(hz=10):
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    h = [Line2D([], [], color=C.C_PAST, lw=2.2), Line2D([], [], color=C.C_GT, lw=2.2),
+    h = [Line2D([], [], color=C.C_PAST, lw=2.2, marker="o", ms=3.5, mec=C.SURF),
+         Line2D([], [], color=C.C_GT, lw=2.2, marker="o", ms=3.5, mec=C.SURF),
          Line2D([], [], color=C.BLUE_RAMP[10], lw=3.0), Line2D([], [], color=C.BLUE_RAMP[4], lw=1.2),
          Line2D([], [], color=C.C_WIN, marker="*", ms=11, ls=(0, (3, 2)), mec=C.INK, mew=0.6),
          Line2D([], [], color=C.C_TOP, marker="^", ms=7, ls="none"),
          Line2D([], [], color=C.INK2, lw=1.3), Line2D([], [], color=C.MUTED, lw=0.8, ls=(0, (3, 2))),
          Patch(facecolor=C.C_BAND, alpha=0.25), Line2D([], [], color=C.C_LEAD, lw=1.4, ls=(0, (2, 1.5))),
          Patch(facecolor="#b9b6ad")]
-    lab = ["과거 5초", "정답 6초", "예측 (확률 높음: 짙고 굵게)", "예측 (확률 낮음)", "★ 승자 = 끝점 오차 최소",
+    lab = ["과거 5초 (· 1초 점" + (", ○ 2 Hz 입력 시점)" if hz == 2 else ")"), "정답 6초 (· 1초 점)", "예측 (확률 높음: 짙고 굵게)", "예측 (확률 낮음)",
+           "★ 승자 = 끝점 오차 최소 (· 1초 점)",
            "▲ 확률 1위", "승자가 탄 후보 경로", "다른 후보 경로", "밴드 (허용 횡오프셋)", "앞차 트랙 (■ = t 0 s)",
-           "다른 차량 (t 0 s)"]
-    return ax.legend(h, lab, loc=loc, fontsize=fontsize, frameon=True, facecolor="white",
-                     edgecolor=C.GRID, framealpha=0.92, handlelength=2.2, ncol=ncol)
+           "다른 차량 (t 0 s)", "원점 → 첫 예측점 (t = 0.1 s)"]
+    h.append(Line2D([], [], color=C.INK2, lw=0.9, ls=(0, (1.0, 1.4))))
+    return h, lab
 
 
 def _series(ax, cx, i):
@@ -218,16 +238,18 @@ def _series(ax, cx, i):
     t, tp = C.T_AX, C.T_PRED
     both = win == top
     lw_lab = "승자 = 1위" if both else "승자 ★"
+    sk = C.step_kw                      # 필수 요건 7: 0.1 s 스텝마다 작은 점 (모델 출력·정답 모두 10 Hz)
+    lc = C.lc_interval(R["gt_d_g"][i], r["cls"])   # 필수 요건 1: 차선변경 구간 (정답 기준 경로 d 의 10–90%)
 
     def pred(a, key, conv=lambda x: x, top_ok=True):
-        a.plot(tp, conv(P[key][i][win]), color=C.C_WIN, lw=1.6, label=lw_lab)
+        a.plot(tp, conv(P[key][i][win]), color=C.C_WIN, lw=1.6, label=lw_lab, **sk())
         if not both and top_ok:
-            a.plot(tp, conv(P[key][i][top]), color=C.C_TOP, lw=1.6, label="1위 ▲")
+            a.plot(tp, conv(P[key][i][top]), color=C.C_TOP, lw=1.6, label="1위 ▲", **sk())
 
     # 1 속도
     a = ax[0]
     a.axvspan(5.45, 6.0, color=C.GRID, alpha=0.8, lw=0, zorder=0)
-    a.plot(t, R["v_pos"][i], color=C.C_GT, lw=1.6, label="정답 (위치 차분)")
+    a.plot(t, R["v_pos"][i], color=C.C_GT, lw=1.6, label="정답 (위치 차분)", **sk())
     a.plot(t, R["v_fld"][i], color=C.MUTED, lw=1.0, ls=(0, (3, 2)), label="정답 (AV2 속도 필드·평활)")
     pred(a, "v")
     a.set_ylabel("속도 v\n[m/s]")
@@ -236,7 +258,7 @@ def _series(ax, cx, i):
     # 2 가속도
     a = ax[1]
     a.axvspan(5.45, 6.0, color=C.GRID, alpha=0.8, lw=0, zorder=0)
-    a.plot(t, R["a_fld"][i], color=C.C_GT, lw=1.6, label="정답 (속도 필드 평활)")
+    a.plot(t, R["a_fld"][i], color=C.C_GT, lw=1.6, label="정답 (속도 필드 평활)", **sk())
     pred(a, "a")
     lim = max(3.0, min(9.0, 1.15 * np.nanmax(np.abs(np.concatenate(
         [R["a_fld"][i], P["a"][i][win], P["a"][i][top]])))))
@@ -246,16 +268,16 @@ def _series(ax, cx, i):
     a = ax[2]
     hg = np.asarray(R["h"][i], np.float64)
     hg = hg - 2 * np.pi * np.round(hg[C.OBS - 1] / (2 * np.pi))
-    a.plot(t, np.degrees(hg), color=C.C_GT, lw=1.6, label="정답")
-    a.plot(tp, np.degrees(_ang_near(P["h"][i][win], hg[C.OBS - 1])), color=C.C_WIN, lw=1.6)
+    a.plot(t, np.degrees(hg), color=C.C_GT, lw=1.6, label="정답", **sk())
+    a.plot(tp, np.degrees(_ang_near(P["h"][i][win], hg[C.OBS - 1])), color=C.C_WIN, lw=1.6, **sk())
     if not both:
-        a.plot(tp, np.degrees(_ang_near(P["h"][i][top], hg[C.OBS - 1])), color=C.C_TOP, lw=1.6)
+        a.plot(tp, np.degrees(_ang_near(P["h"][i][top], hg[C.OBS - 1])), color=C.C_TOP, lw=1.6, **sk())
     a.set_ylabel("진행방향 h\n[°]")
     # 4 잔차각
     a = ax[3]
     thg = np.degrees(C.wrap(hg - R["gt_k_w"][i]))
     thg[R["v_fld"][i] < C.MOVE_V] = np.nan
-    a.plot(t, thg, color=C.C_GT, lw=1.2, ls=(0, (3, 2)), label="정답 θ (승자 경로 기준, v≥1 m/s)")
+    a.plot(t, thg, color=C.C_GT, lw=1.2, ls=(0, (3, 2)), label="정답 θ (승자 경로 기준, v≥1 m/s)", **sk())
     pred(a, "theta", np.degrees, top_ok=True)
     a.set_ylabel("잔차각 θ\n[°]")
     # 5 횡오프셋 (승자 경로 기준)
@@ -264,8 +286,9 @@ def _series(ax, cx, i):
     a.plot(t, bd[:, 0], color=C.C_BAND, lw=1.0, ls=(0, (4, 2)), label="밴드 좌/우 한계")
     a.plot(t, -bd[:, 1], color=C.C_BAND, lw=1.0, ls=(0, (4, 2)))
     a.axhline(0, color=C.AXIS, lw=0.8)
-    a.plot(t, R["gt_d_w"][i], color=C.C_GT, lw=1.6, label="정답 d")
+    a.plot(t, R["gt_d_w"][i], color=C.C_GT, lw=1.6, label="정답 d", **sk())
     pred(a, "d", top_ok=same_route)
+    C.shade_lc(a, lc)
     ys = np.concatenate([R["gt_d_w"][i][C.OBS - 10:], P["d"][i][win], bd[C.OBS:, 0], -bd[C.OBS:, 1]])
     a.set_ylim(max(-12, np.nanmin(ys) - 0.8), min(12, np.nanmax(ys) + 0.8))
     a.set_ylabel("횡오프셋 d\n[m] (+좌)")
@@ -275,7 +298,7 @@ def _series(ax, cx, i):
     a = ax[5]
     ld = R["lead_dist"][i]
     if np.isfinite(ld).any():
-        a.plot(t, ld, color=C.C_LEAD, lw=1.6)
+        a.plot(t, ld, color=C.C_LEAD, lw=1.6, **sk())
         a.set_ylim(0, min(C.LEAD_MAX_M, np.nanmax(ld) * 1.2 + 2))
         g49 = r["gap49"]
         txt = (f"t=0 s: {g49:.1f} m · 시간간격 {r['thw49']:.1f} s" if np.isfinite(r["thw49"])
@@ -290,6 +313,8 @@ def _series(ax, cx, i):
     for a in ax:
         a.axvline(0, color=C.INK2, lw=0.8, zorder=1)
         a.set_xlim(-5, 6)
+        if a is not ax[4]:
+            C.shade_lc(a, lc, label=False)
     for a in ax[:-1]:
         a.tick_params(labelbottom=False)
     from matplotlib.lines import Line2D
@@ -300,6 +325,12 @@ def _series(ax, cx, i):
     ls_ = ["정답 (v: 위치 차분 / a: 속도 필드 평활)", "정답 v (AV2 속도 필드·평활)",
            "정답 θ (승자 경로 기준, v≥1 m/s)", "승자 ★" if not both else "승자 = 1위",
            "확률 1위 ▲", "밴드 좌/우 한계", "앞차 거리 (경로 따라 중심 간)"]
+    from matplotlib.patches import Patch
+    hs.append(Line2D([], [], color=C.INK2, lw=0, marker="o", ms=C.STEP_MS_10HZ))
+    ls_.append("점 = 0.1 s 스텝")
+    if lc is not None:
+        hs.append(Patch(facecolor=C.C_YELLOW, alpha=0.3))
+        ls_.append(f"차선변경 구간 (정답 경로 d 변화 {int(C.LC_FRAC[0] * 100)}–{int(C.LC_FRAC[1] * 100)}%)")
     ax[0].legend(hs, ls_, loc="lower left", bbox_to_anchor=(0.0, 1.03), ncol=3, fontsize=7.2,
                  borderaxespad=0.0, handlelength=2.0, columnspacing=1.2)
 
@@ -389,7 +420,7 @@ def case_figure(cx, i, group, k, out):
     draw_map(axm, cx, i)
     axl = fig.add_subplot(gs[7, 0])
     axl.axis("off")
-    map_legend(axl, loc="center", fontsize=7.3, ncol=3)
+    map_legend(axl, loc="center", fontsize=7.3, ncol=3, hz=cx.hz)
     axt = fig.add_subplot(gs[8:12, 0])
     _textbox(axt, cx, i, group)
     ts = [fig.add_subplot(gs[2 * j:2 * j + 2, 1]) for j in range(6)]
@@ -397,7 +428,9 @@ def case_figure(cx, i, group, k, out):
     sub = gs[0:12, 2].subgridspec(5, 1, hspace=0.45)
     bs = [fig.add_subplot(sub[j, 0]) for j in range(5)]
     _bars(bs, cx, i)
-    fig.suptitle(f"[{group} {k}/9]  {r['sid']}  ·  상황 {r['cls']}  ·  minADE6 {r['minade']:.2f} m "
+    art = (f"  ·  ※ 위치로는 직진(시작·끝 방향 차 {cx.turn_alt[i]:+.0f}°, 분류 인공물 후보)"
+           if cx.turn_straight[i] else "")
+    fig.suptitle(f"[{group} {k}/9 · {cx.tag} · {cx.hz} Hz]  {r['sid']}  ·  상황 {r['cls']}{art}  ·  minADE6 {r['minade']:.2f} m "
                  f"(백분위 {r['pct_minade']:.1f})  ·  minFDE6 {r['minfde']:.2f} m  ·  승자{'=' if r['win_eq_top1'] else '≠'}1위",
                  fontsize=13, x=0.02, ha="left")
     return C.savefig(fig, out)
@@ -409,14 +442,20 @@ def overview(cx, ids, group, pr, out):
     for a, i in zip(axes.flat, ids):
         r = cx.df.iloc[i]
         draw_map(a, cx, i, compact=True)
-        a.set_title(f"{r['sid'][:8]} · {r['cls']} · 분기 {int(r['n_distinct'])}\n"
+        mark = " ※" if cx.turn_straight[i] else ""
+        a.set_title(f"{r['sid'][:8]} · {r['cls']}{mark} · 분기 {int(r['n_distinct'])}\n"
                     f"minADE6 {r['minade']:.2f} · minFDE6 {r['minfde']:.2f} m · 승자{'=' if r['win_eq_top1'] else '≠'}1위",
                     fontsize=10)
-    leg = map_legend(axes.flat[0], fontsize=7)
-    fig.suptitle(f"{group} 9개 — minADE6 백분위 {pr['pct_range'][0]:g}–{pr['pct_range'][1]:g} "
-                 f"({pr['minade_range'][0]:.2f}–{pr['minade_range'][1]:.2f} m, 후보 {pr['n_pool']:,}개 중 시드 {C.SEED} 무작위)",
-                 fontsize=15, x=0.02, ha="left")
-    fig.tight_layout(rect=[0, 0, 1, 0.965])
+    marks = [i for i in ids if cx.turn_straight[i]]
+    fig.suptitle(f"{group} 9개 — {cx.tag} · {cx.hz} Hz 입력 — minADE6 백분위 {pr['pct_range'][0]:g}–{pr['pct_range'][1]:g} "
+                 f"({pr['minade_range'][0]:.2f}–{pr['minade_range'][1]:.2f} m, 후보 {pr['n_pool']:,}개 중 시드 {C.SEED} 무작위)"
+                 + ("   ※ = 회전 라벨이지만 위치로는 직진(분류 인공물 후보)" if marks else ""),
+                 fontsize=14, x=0.02, ha="left", y=0.995)
+    # 범례는 지도 칸 밖(제목 아래)에 — 칸 안에 두면 궤적·상자를 가린다
+    h, lab = legend_items(cx.hz)
+    fig.legend(h, lab, loc="upper left", bbox_to_anchor=(0.02, 0.975), ncol=6, fontsize=8.6, frameon=True,
+               facecolor="white", edgecolor=C.GRID, handlelength=2.2, columnspacing=1.4)
+    fig.tight_layout(rect=[0, 0, 1, 0.925])
     return C.savefig(fig, out)
 
 

@@ -107,6 +107,51 @@ CLASS_COLOR = {"좌회전": C_BLUE, "우회전": C_ORANGE, "좌차선변경": C_
 EPOCH_RAMP = ["#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 
 
+# ---------------------------------------------------------------- 스텝 점 (필수 요건 7)
+# 시계열은 선 + 스텝마다 점. 10 Hz(0.1 s) 는 작은 점, 2 Hz(0.5 s) 는 큰 점. 궤적 그림은 1초 간격 점.
+STEP_MS_10HZ = 3.4          # 선(굵기 ≤ 2 pt)보다 커야 점이 보인다
+STEP_MS_2HZ = 7.0
+
+
+def step_kw(hz=10, color=None, **kw):
+    """ax.plot 에 넘길 스텝 점 인자 (선 색과 같은 점, 얇은 흰 테두리로 구슬처럼 보이게)."""
+    d = dict(marker="o", ms=STEP_MS_10HZ if hz == 10 else STEP_MS_2HZ, mec=SURF, mew=0.45)
+    if color is not None:
+        d["mfc"] = color
+    d.update(kw)
+    return d
+
+
+# ---------------------------------------------------------------- 차선변경 구간 (필수 요건 1)
+LC_FRAC = (0.1, 0.9)   # 정답 기준 경로 횡오프셋이 시작값→끝값 변화의 10% 를 넘은 때 ~ 90% 에 처음 닿은 때
+
+
+def lc_interval(d_g, cls):
+    """정답 기준 경로의 d(110스텝) -> 차선변경 구간 (t0, t1) [s] (0 = 예측 시작). 차선변경 상황이 아니면 None.
+    시작·끝값은 viz_v4_dump 의 dd6 와 같은 평균 창(t=47..51 / 끝 5스텝)이다."""
+    if cls not in ("좌차선변경", "우차선변경"):
+        return None
+    d = np.asarray(d_g, np.float64)
+    d0, d1 = d[OBS - 3:OBS + 2].mean(), d[-5:].mean()
+    if abs(d1 - d0) < 1e-6:
+        return None
+    f = (d[OBS - 1:] - d0) / (d1 - d0)
+    k0 = np.argmax(f >= LC_FRAC[0]) if (f >= LC_FRAC[0]).any() else None
+    k1 = np.argmax(f >= LC_FRAC[1]) if (f >= LC_FRAC[1]).any() else None
+    if k0 is None or k1 is None:
+        return None
+    return float(T_AX[OBS - 1 + k0]), float(T_AX[OBS - 1 + max(k1, k0)])
+
+
+def shade_lc(ax, iv, label=True):
+    if iv is None:
+        return
+    ax.axvspan(iv[0], iv[1], color=C_YELLOW, alpha=0.16, lw=0, zorder=0)
+    if label:
+        ax.text((iv[0] + iv[1]) / 2, 0.03, "차선변경", transform=ax.get_xaxis_transform(), ha="center",
+                va="bottom", fontsize=6.8, color=INK2)
+
+
 def epoch_colors(epochs):
     """에폭 목록 -> 색. 5개 이하면 EPOCH_RAMP 에서 양 끝을 포함해 고르게, 더 많으면 파랑 램프에서 고르게."""
     epochs = list(epochs)
@@ -544,3 +589,108 @@ def tree_leaves(nd):
     for _, c in kids:
         out += tree_leaves(c)
     return out
+
+
+# ---------------------------------------------------------------- 궤적 그리기 공통 (2026-09-17 검토 반영)
+IDX_2HZ = np.arange(OBS - 1, 4 - 1, -5)[::-1]      # 2 Hz 입력이 뽑는 관측 시점 (인덱스 4, 9, …, 49 = −4.5 … 0 s)
+
+
+def input_hz(inp):
+    """학습 인자 input -> 입력 주기 [Hz] (ah2 10 · ah2_2hz 2 · raw5 10)."""
+    return 2 if str(inp).endswith("2hz") else 10
+
+
+def origin_join(ax, first_xy, color, lw=1.0, zorder=10, alpha=0.75):
+    """원점(t=0 위치) -> 예측 첫 점(t=0.1 s)을 가는 점선으로 잇는다.
+    모델 출력은 t=0.1 s 부터라, 이 구간을 실선으로 그리면 출발점이 차량에서 떨어진 모드(캐시 (s0, d0) 결함,
+    docs/v4_viz_cos30.md 7절)가 '도로 밖으로 꺾는 선'처럼 보인다."""
+    p = np.asarray(first_xy, np.float64).reshape(2)
+    ax.plot([0.0, p[0]], [0.0, p[1]], color=color, lw=max(0.6, lw * 0.5), ls=(0, (1.0, 1.4)),
+            alpha=alpha, zorder=zorder, solid_capstyle="butt")
+
+
+def past_dots(ax, pos_past, hz, color, zorder=11, dark=False):
+    """관측 과거에 1초 간격 점(작게)과, 2 Hz 입력이면 입력 시점 점(크게, 빈 원)을 찍는다 (필수 요건 6·7)."""
+    p = np.asarray(pos_past, np.float64)
+    sec = p[OBS - 1::-10][::-1]                                      # −4.9 … 0 s 중 1초 간격 (… −1, 0)
+    ec = "#07080a" if dark else SURF
+    ax.scatter(sec[:, 0], sec[:, 1], s=10, color=color, edgecolors=ec, linewidths=0.5, zorder=zorder)
+    if hz == 2:
+        q = p[IDX_2HZ]
+        ax.scatter(q[:, 0], q[:, 1], s=34, facecolors="none", edgecolors=color, linewidths=1.2, zorder=zorder + 0.1)
+
+
+def turn_straight_by_position(pos, cls, min_path=4.0, lim_deg=15.0):
+    """정답 기반 '회전' 라벨인데 위치로는 직진인 시나리오 (분류 인공물 후보).
+    예측 구간(인덱스 49..109) 위치로 시작 방향(1 s 변위, 1 m 미만이면 처음 2 m)과 끝 방향(마지막 2 m)을 재고,
+    그 차가 lim_deg 미만이면 True. 경로 길이 min_path 미만이면 판정하지 않는다(False).
+    분류기(Δh: 속도 ≥ MOVE_V 인 스텝의 진행방향)는 바꾸지 않는다 — 정지 직전 방향 잡음이 Δh 를 만드는 경우를 표시만 한다."""
+    pos = np.asarray(pos, np.float64)
+    cls = np.asarray(cls)
+    out = np.zeros(len(pos), bool)
+    alt = np.full(len(pos), np.nan)
+    for i in range(len(pos)):
+        q = pos[i, OBS - 1:]
+        cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(q, axis=0), axis=1))])
+        if cum[-1] < min_path:
+            continue
+        d0 = q[10] - q[0]
+        if np.linalg.norm(d0) < 1.0:
+            d0 = q[min(int(np.searchsorted(cum, 2.0)), len(q) - 1)] - q[0]
+        j = int(np.searchsorted(cum, cum[-1] - 2.0))
+        d1 = q[-1] - q[max(j - 1, 0)]
+        alt[i] = (np.degrees(np.arctan2(d1[1], d1[0]) - np.arctan2(d0[1], d0[0])) + 180.0) % 360.0 - 180.0
+    turn = np.isin(cls, ["좌회전", "우회전"])
+    out = turn & np.isfinite(alt) & (np.abs(alt) < lim_deg)
+    return out, alt
+
+
+def place_labels(ax, xy, texts, fontsize=7.4, color=INK2, offsets=None):
+    """점 라벨을 서로 겹치지 않게 놓는다 (탐욕적: 후보 오프셋을 차례로 시도, 이미 놓인 글상자와 겹치면 다음)."""
+    fig = ax.figure
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    offsets = offsets or [(5, 4), (5, -11), (-5, 4), (-5, -11), (5, 13), (-5, 13), (5, -20), (-5, -20),
+                          (14, 0), (-14, 0), (5, 22), (-5, 22)]
+    placed = []
+    arts = []
+    for (x, y), t in zip(xy, texts):
+        best = None
+        for dx, dy in offsets:
+            a = ax.annotate(t, (x, y), xytext=(dx, dy), textcoords="offset points", fontsize=fontsize, color=color,
+                            ha="left" if dx >= 0 else "right", va="bottom" if dy >= 0 else "top")
+            bb = a.get_window_extent(rend).expanded(1.05, 1.15)
+            if not any(bb.overlaps(p) for p in placed):
+                best = (a, bb)
+                break
+            a.remove()
+        if best is None:
+            dx, dy = offsets[0]
+            a = ax.annotate(t, (x, y), xytext=(dx, dy), textcoords="offset points", fontsize=fontsize, color=color)
+            best = (a, a.get_window_extent(rend))
+        placed.append(best[1])
+        arts.append(best[0])
+    return arts
+
+
+def start_offset(routes, route_tan, route_len, sd0):
+    """캐시 시작 상태 (s0, d0) 를 model_v4.route_point 와 같은 규칙으로 되돌린 점 P(s0) + N(s0)·d0 가
+    원점(현재 위치)에서 떨어진 거리 [m]. 모델과 무관하다 — 0 에 가까워야 정상이다.
+    routes (..., M, 2) · route_tan (..., M, 2) · route_len (...) · sd0 (..., 2) -> (...)."""
+    P = np.asarray(routes, np.float64)
+    T = np.asarray(route_tan, np.float64)
+    M = P.shape[-2]
+    L = np.maximum(np.asarray(route_len, np.float64), 1e-3)
+    s = np.asarray(sd0, np.float64)[..., 0]
+    d = np.asarray(sd0, np.float64)[..., 1]
+    idx = np.clip(s / L * (M - 1), 0.0, M - 1 - 1e-4)
+    i0 = np.floor(idx).astype(int)
+    f = (idx - i0)[..., None]
+    take = lambda A, ii: np.take_along_axis(A, ii[..., None, None].repeat(2, -1), axis=-2)[..., 0, :]
+    p = take(P, i0) * (1 - f) + take(P, np.minimum(i0 + 1, M - 1)) * f
+    tg = take(T, i0) * (1 - f) + take(T, np.minimum(i0 + 1, M - 1)) * f
+    unit = lambda v: v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-6)
+    p = p + unit(T[..., 0, :]) * np.minimum(s, 0.0)[..., None] + unit(T[..., -1, :]) * np.maximum(s - L, 0.0)[..., None]
+    tg = unit(tg)
+    q = p + np.stack([-tg[..., 1], tg[..., 0]], -1) * d[..., None]
+    return np.linalg.norm(q, axis=-1)

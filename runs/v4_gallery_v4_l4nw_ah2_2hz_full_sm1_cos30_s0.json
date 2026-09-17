@@ -14,7 +14,7 @@
   "model_desc": "L4nw · (a, h) 2 Hz 입력 · 전체 데이터 · 흔들림 벌점 1.0",
   "val_cache": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988",
   "dump_repro_ok": true,
-  "git_head": "97546c3072e3f8f8e3d61bc8b1dd677f4f8b7399",
+  "git_head": "132433b630d282b710e1ea061a43a50a98418d7e",
   "population": {
     "split": "val",
     "n": 24988
@@ -863,70 +863,90 @@
         "past_end_abs_max_m": 0.0,
         "pos_future_vs_y_max_m": 3.814697265625e-06,
         "pred_first_vs_gt_first_m_max": 0.167,
+        "tol_first_m": 0.5,
         "ok": true,
+        "cause": "",
         "rows": [
           {
             "idx": 17508,
+            "sid": "b3bf0a94-781e-4896-a307-bfd3962de9ea",
             "gt_first_step_m": 0.808,
             "pred_first_step_m_max": 0.781,
             "pred_first_vs_gt_first_m_max": 0.06,
-            "best_first_vs_gt_first_m": 0.028
+            "best_first_vs_gt_first_m": 0.028,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 3735,
+            "sid": "26f238ba-76a6-45d5-89f9-049f6c4628c1",
             "gt_first_step_m": 0.402,
             "pred_first_step_m_max": 0.397,
             "pred_first_vs_gt_first_m_max": 0.018,
-            "best_first_vs_gt_first_m": 0.017
+            "best_first_vs_gt_first_m": 0.017,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 23214,
+            "sid": "eda9853d-7cda-4e8b-a013-dc16c17476c8",
             "gt_first_step_m": 1.166,
             "pred_first_step_m_max": 1.16,
             "pred_first_vs_gt_first_m_max": 0.02,
-            "best_first_vs_gt_first_m": 0.012
+            "best_first_vs_gt_first_m": 0.012,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 10047,
+            "sid": "671e243a-2c79-44e1-892a-21f6fc7967ee",
             "gt_first_step_m": 0.784,
             "pred_first_step_m_max": 0.819,
             "pred_first_vs_gt_first_m_max": 0.051,
-            "best_first_vs_gt_first_m": 0.032
+            "best_first_vs_gt_first_m": 0.032,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 12033,
+            "sid": "7c67e062-736a-4173-bab9-9b1599564de2",
             "gt_first_step_m": 0.846,
             "pred_first_step_m_max": 0.766,
             "pred_first_vs_gt_first_m_max": 0.134,
-            "best_first_vs_gt_first_m": 0.085
+            "best_first_vs_gt_first_m": 0.085,
+            "start_offset_m_max": 0.001
           },
           {
             "idx": 1809,
+            "sid": "1348ce00-20fa-45d3-b546-d53bd53c9957",
             "gt_first_step_m": 0.87,
             "pred_first_step_m_max": 0.782,
             "pred_first_vs_gt_first_m_max": 0.099,
-            "best_first_vs_gt_first_m": 0.092
+            "best_first_vs_gt_first_m": 0.092,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 18155,
+            "sid": "b9f6549b-5713-4cce-a6b4-f16e35ce4a07",
             "gt_first_step_m": 1.851,
             "pred_first_step_m_max": 1.828,
             "pred_first_vs_gt_first_m_max": 0.167,
-            "best_first_vs_gt_first_m": 0.033
+            "best_first_vs_gt_first_m": 0.033,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 8177,
+            "sid": "54194f3b-5b03-4f38-88b8-1f71d8040785",
             "gt_first_step_m": 0.121,
             "pred_first_step_m_max": 0.135,
             "pred_first_vs_gt_first_m_max": 0.014,
-            "best_first_vs_gt_first_m": 0.014
+            "best_first_vs_gt_first_m": 0.014,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 9036,
+            "sid": "5c90bd35-7788-46fd-b6f5-6f656f5ca41e",
             "gt_first_step_m": 0.233,
             "pred_first_step_m_max": 0.227,
             "pred_first_vs_gt_first_m_max": 0.022,
-            "best_first_vs_gt_first_m": 0.013
+            "best_first_vs_gt_first_m": 0.013,
+            "start_offset_m_max": 0.0
           }
         ]
       },
@@ -935,7 +955,7 @@
       "dpi": 140,
       "past_view_s": 2.0,
       "min_span_m": 40.0,
-      "made": "2026-09-17 12:50:23"
+      "made": "2026-09-17 15:40:29"
     },
     "avg_median": {
       "png": "/home/user/Argoverse2study/viz/v4/v4_l4nw_ah2_2hz_full_sm1_cos30_s0/gallery/avg_median.png",
@@ -1726,70 +1746,90 @@
         "past_end_abs_max_m": 0.0,
         "pos_future_vs_y_max_m": 3.814697265625e-06,
         "pred_first_vs_gt_first_m_max": 4.608,
+        "tol_first_m": 0.5,
         "ok": false,
+        "cause": "첫 점이 정답 첫 점에서 0.5 m 넘게 떨어진 시나리오 1개 중 1개는 캐시 시작 상태(route_sd0) 복원점이 이미 0.5 m 넘게 벗어나 있다 — 그림 좌표가 아니라 전처리 결함(docs/v4_viz_cos30.md 7절)",
         "rows": [
           {
             "idx": 3118,
+            "sid": "205dcedc-9545-4999-8d24-df06c1d694a9",
             "gt_first_step_m": 1.097,
             "pred_first_step_m_max": 1.107,
             "pred_first_vs_gt_first_m_max": 0.11,
-            "best_first_vs_gt_first_m": 0.014
+            "best_first_vs_gt_first_m": 0.014,
+            "start_offset_m_max": 0.001
           },
           {
             "idx": 9413,
+            "sid": "60d0c166-b8ab-4959-86aa-6db3e98326ad",
             "gt_first_step_m": 1.181,
             "pred_first_step_m_max": 1.198,
             "pred_first_vs_gt_first_m_max": 0.046,
-            "best_first_vs_gt_first_m": 0.035
+            "best_first_vs_gt_first_m": 0.035,
+            "start_offset_m_max": 0.004
           },
           {
             "idx": 3144,
+            "sid": "20b27760-7914-4d79-a061-615c599ad7fa",
             "gt_first_step_m": 0.758,
             "pred_first_step_m_max": 5.048,
             "pred_first_vs_gt_first_m_max": 4.608,
-            "best_first_vs_gt_first_m": 0.025
+            "best_first_vs_gt_first_m": 0.025,
+            "start_offset_m_max": 4.452
           },
           {
             "idx": 5843,
+            "sid": "3c9bcd3f-f095-4220-ac19-44034a6f1ea2",
             "gt_first_step_m": 0.618,
             "pred_first_step_m_max": 0.544,
             "pred_first_vs_gt_first_m_max": 0.088,
-            "best_first_vs_gt_first_m": 0.077
+            "best_first_vs_gt_first_m": 0.077,
+            "start_offset_m_max": 0.001
           },
           {
             "idx": 6725,
+            "sid": "4508ca95-d37d-4ea9-aef9-c2434a79a366",
             "gt_first_step_m": 0.303,
             "pred_first_step_m_max": 0.314,
             "pred_first_vs_gt_first_m_max": 0.04,
-            "best_first_vs_gt_first_m": 0.002
+            "best_first_vs_gt_first_m": 0.002,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 595,
+            "sid": "067dad19-6c3e-421c-9288-7c6fc36eea48",
             "gt_first_step_m": 0.095,
             "pred_first_step_m_max": 0.089,
             "pred_first_vs_gt_first_m_max": 0.007,
-            "best_first_vs_gt_first_m": 0.007
+            "best_first_vs_gt_first_m": 0.007,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 3357,
+            "sid": "230f1df9-b30e-4060-8b60-ab1549c3d17c",
             "gt_first_step_m": 0.996,
             "pred_first_step_m_max": 1.033,
             "pred_first_vs_gt_first_m_max": 0.173,
-            "best_first_vs_gt_first_m": 0.036
+            "best_first_vs_gt_first_m": 0.036,
+            "start_offset_m_max": 0.039
           },
           {
             "idx": 11442,
+            "sid": "7653f8eb-ed1b-435b-8b9d-bde88ecfbb06",
             "gt_first_step_m": 0.017,
             "pred_first_step_m_max": 0.038,
             "pred_first_vs_gt_first_m_max": 0.021,
-            "best_first_vs_gt_first_m": 0.007
+            "best_first_vs_gt_first_m": 0.007,
+            "start_offset_m_max": 0.0
           },
           {
             "idx": 8568,
+            "sid": "57b16f86-a30d-4c20-9774-36732c9adcc0",
             "gt_first_step_m": 0.096,
             "pred_first_step_m_max": 0.117,
             "pred_first_vs_gt_first_m_max": 0.021,
-            "best_first_vs_gt_first_m": 0.021
+            "best_first_vs_gt_first_m": 0.021,
+            "start_offset_m_max": 0.0
           }
         ]
       },
@@ -1798,7 +1838,7 @@
       "dpi": 140,
       "past_view_s": 2.0,
       "min_span_m": 40.0,
-      "made": "2026-09-17 12:50:25"
+      "made": "2026-09-17 15:40:31"
     }
   },
   "v3": {
@@ -1916,6 +1956,6 @@
       "y_vs_v4_dump_max_m": 0.0
     },
     "note": "고른 시나리오는 배치 18 로 돌렸다 — 배치 크기에 따라 cuDNN 결과가 수 mm 달라질 수 있다 (배치 1 대조 최대 2.6e-3 m)",
-    "sec": 6.5
+    "sec": 6.7
   }
 }
