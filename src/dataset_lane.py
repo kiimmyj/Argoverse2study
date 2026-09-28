@@ -44,6 +44,9 @@ N_RPTS = 64                       # 경로 하나를 호길이 등간격 몇 점
 # 붙어 있어 모드 6개가 사실상 1개가 된다 (minADE6 이 minADE1 로 퇴화).
 DEDUP_M = 2.5
 
+# 평활판 입력 이름 -> (다운샘플 간격, 가우시안 σ [s]). σ=0 은 평활 없이 나머지(혼합·게이트·램프 제외)만 바꾼 대조판이다.
+AH3_CFG = {"ah3": (1, 0.25), "ah3_2hz": (5, 0.25), "ah3n": (1, 0.0), "ah3s": (1, 0.15)}
+
 
 def _at(route, s_query):
     """경로 위 호길이 s 지점의 좌표 (경로보다 멀면 끝점)."""
@@ -95,8 +98,8 @@ class Av2LaneRuleDataset(Dataset):
         self.theta_ch, self.h_src = theta_ch, h_src
         self.routes, self.n_modes = routes, n_modes
         self.fallback = fallback
-        if input_repr not in ("raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz"):
-            raise ValueError(f"input_repr 는 raw5 | ah2 | ah2_2hz | ah3 | ah3_2hz 다: {input_repr}")
+        if input_repr not in ("raw5", "ah2", "ah2_2hz") and input_repr not in AH3_CFG:
+            raise ValueError(f"input_repr 는 raw5 | ah2 | ah2_2hz | {' | '.join(AH3_CFG)} 다: {input_repr}")
         if theta_ch and input_repr != "raw5":
             raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 계열은 이미 h 를 담는다")
         self.input_repr = input_repr
@@ -141,11 +144,12 @@ class Av2LaneRuleDataset(Dataset):
             elif self.input_repr == "ah2_2hz":
                 # h0(h_last) 는 위의 10 Hz 값을 그대로 쓴다 — 입력만 2 Hz 로 바꾸고 적분기 시작값은 건드리지 않는다
                 x = ah_features_2hz(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
-            elif self.input_repr in ("ah3", "ah3_2hz"):
-                # 평활판(2026-09-29): 가우시안 σ=0.25 s + 속력 가중 혼합 + 뒤집힘 판정 게이트.
+            elif self.input_repr in AH3_CFG:
+                # 평활판(2026-09-29): 가우시안 평활 + 속력 가중 혼합 + 뒤집힘 판정 게이트.
                 # h0 도 평활판 10 Hz 값으로 바꾼다 — 적분기 시작 진행방향을 더 나은 추정으로 두는 것이 목적이다.
+                st, sg = AH3_CFG[self.input_repr]
                 x, h_last = ah_features_v3(pos[:OBS_LEN], head[:OBS_LEN], float(theta),
-                                           step=1 if self.input_repr == "ah3" else 5)
+                                           step=st, sigma_s=sg)
         y = pos_n[OBS_LEN:]
 
         # --- 지도: 원본 JSON에서 직접 그래프를 만든다 ---

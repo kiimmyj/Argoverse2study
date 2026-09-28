@@ -382,7 +382,8 @@ def ah_features_v3(pos_obs, head_obs, yaw0, dt=DT, step=1, skip=RAMP_SKIP,
     """
     pos_obs = np.asarray(pos_obs, dtype=np.float64)
     T = len(pos_obs)
-    sm = gauss_pad_smooth(pos_obs[skip:], sigma_steps=sigma_s / dt)
+    sm = (pos_obs[skip:].copy() if sigma_s <= 0            # sigma_s=0 이면 평활 없이 나머지만 바꾼다(대조판)
+          else gauss_pad_smooth(pos_obs[skip:], sigma_steps=sigma_s / dt))
     idx = np.arange(T - 1, skip - 1, -step)[::-1]              # 마지막 관측(정규화 원점)이 반드시 들어간다
     p = sm[idx - skip]
     dt_s = dt * step
