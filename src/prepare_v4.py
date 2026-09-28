@@ -47,6 +47,12 @@ CACHE_ROOT = "/data/argoverse2/cache/v4"
 # 캐시 키에 들어가는 소스는 dataset_cached.source_files() 가 import 를 따라가 자동으로 모은다.
 # (손으로 적은 목록에는 heading_decomp.py · dataset_map.py 가 빠져 있었다.)
 
+# 입력 형태별 x 길이. ah3 계열은 창 가장자리 램프(인덱스 0~3)를 버려 46스텝이다.
+X_LEN = {"raw5": 50, "ah2": 50, "ah2_2hz": 10, "ah3": 46, "ah3_2hz": 10}
+def AH(name):
+    return name.startswith("ah2") or name.startswith("ah3")
+
+
 # 알려진 파라미터 수 — in_dim=5, lane_in=30 (--input raw5 --theta 0 --rules 1) 기준.
 # LSTM 입력층이 4·HID·in_dim = 512·in_dim 이라, 채널 수가 다르면 512·(in_dim − 5) 만큼 옮겨 대조한다
 # (실측: in_dim 8 → 453,753, in_dim 2 → 450,681).
@@ -263,8 +269,8 @@ def verify_data(args, cache_dir, split):
     log(f"[{split}] n={n:,}  필드 {len(meta['fields'])}개")
 
     s = ds[0]
-    exp_in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
-    exp_T = 10 if args.input == "ah2_2hz" else 50          # 2 Hz 입력은 관측 50스텝을 10스텝으로 뽑는다
+    exp_in_dim = (2 if AH(args.input) else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
+    exp_T = X_LEN[args.input]          # 2 Hz 입력은 10스텝, ah3(평활판)은 램프 4스텝을 버려 46스텝
     check(tuple(s["x"].shape) == (exp_T, exp_in_dim), f"x shape ({exp_T},{exp_in_dim})")
     check(tuple(s["y"].shape) == (60, 2), "y shape (60,2)")
     check(tuple(s["lanes"].shape) == (20, 10, 2), "lanes shape (20,10,2)")
@@ -335,7 +341,7 @@ def verify_model(args, cache_dir):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_rules = bool(args.rules)
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
+    in_dim = (2 if AH(args.input) else 5) + (3 if args.theta else 0)   # train_v4.py 와 같은 규칙
 
     for level in (("l2", "l3", "l0") if args.all_levels else (args.level,)):
         log(f"\n[{level}]  in_dim={in_dim} lane_in={lane_in}")
@@ -420,7 +426,7 @@ def main():
     # 아래 세 인자는 train_v4.py 의 같은 이름 인자와 기본값이 같아야 같은 데이터·모델이 된다.
     # --fallback · --input 은 캐시 키에 들어가므로 값마다 다른 캐시가 생긴다. --th0 는 모델 검증에만 쓴다.
     p.add_argument("--fallback", default="straight1", choices=("straight1", "straight6", "fan"))
-    p.add_argument("--input", default="raw5", choices=("raw5", "ah2", "ah2_2hz"))
+    p.add_argument("--input", default="raw5", choices=tuple(X_LEN))
     p.add_argument("--th0", default="current", choices=("current", "guard"))
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--offlane", type=float, default=0.0)

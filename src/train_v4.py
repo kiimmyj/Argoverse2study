@@ -159,9 +159,10 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
-    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz"],
+    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz"],
                     help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향 / "
-                         "ah2_2hz=같은 (a, h) 를 위치 평활 뒤 2 Hz 로 뽑은 10스텝")
+                         "ah2_2hz=같은 (a, h) 를 위치 평활 뒤 2 Hz 로 뽑은 10스텝, "
+                         "ah3/ah3_2hz=평활판(가우시안 σ0.25 s + 속력 가중 혼합, 램프 4스텝 버림)")
     ap.add_argument("--th0", default="current", choices=["current", "guard"],
                     help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
     ap.add_argument("--smooth", type=float, default=None,
@@ -216,7 +217,7 @@ def main():
                     num_workers=args.workers, persistent_workers=True)
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
-    in_dim = (2 if args.input.startswith("ah2") else 5) + (3 if args.theta else 0)
+    in_dim = (2 if args.input.startswith(("ah2", "ah3")) else 5) + (3 if args.theta else 0)
     model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0).to(device)
     npar = sum(p.numel() for p in model.parameters())
     print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "

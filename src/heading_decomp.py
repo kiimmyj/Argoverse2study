@@ -244,6 +244,157 @@ def ah_features_2hz(pos_obs, head_obs, yaw0, dt=DT, step=DS_STEP, v_min=V_MIN,
     return np.stack([a_ch, h_n], axis=1).astype(np.float32)
 
 
+# ------------------------------------------------------------------ v3 전처리 (2026-09-29)
+# 평활 + 속력 가중 혼합. 문헌 조사와 우리 데이터 실측(docs/v4_smoothing_study.md)에서 나온 값이다.
+#
+# 왜 바꾸나
+# ---------
+# 1) 지금 2 Hz 판이 쓰는 SG(5,2) 는 **아무 일도 하지 않는다**. 2 Hz 직진 |Δh| p90 이
+#    평활 없음 3.23 / SG(5,2) 3.23 °/s 로 같다. -3 dB 가 2.38 Hz 라 1 Hz(2 Hz 표집의 Nyquist)
+#    위 잡음을 못 막는다 — 반에일리어싱 필터가 아니다.
+# 2) 실측 잡음은 백색이 아니다. 저주파 흔들림 σ 13.5 cm + 백색 σ 0.77 cm + 두꺼운 꼬리
+#    (정지 차량 스텝의 4.02% 가 1 m/s 를 넘는다). 이동 차량 위치 스펙트럼이 정지 차량(순수 잡음)과
+#    같아지는 지점이 **0.6~1.0 Hz** 라, 컷오프를 그 바로 아래에 두면 신호가 이기는 대역만 남는다.
+# 3) V_MIN 하드 스위치는 속력이 1 m/s 를 오르내릴 때 h 출처가 위치차분 ↔ AV2 사이를 오가며
+#    한 스텝에 ±150 °/s 계단을 만든다. 속력 가중 혼합이면 이 계단이 없다.
+# 4) align_ref 는 정지 차량의 위치 잡음으로 180° 판정을 내린다(차로 반대 비율 AV2 0.97% → 10 Hz 12.2%).
+#    판정을 **실제로 움직인 구간**에서만 하도록 게이트를 건다.
+GAUSS_SIGMA_S = 0.25       # 가우시안 커널 폭 [s] → -3 dB 0.1325/σ = 0.53 Hz (실측 교차점 바로 아래)
+PAD_FIT, PAD_ORDER = 9, 2  # 경계 외삽: 끝 9점에 2차 다항. 1차(등속)면 창 끝 요레이트가 0.33배로 죽는다(2차는 0.987)
+BLEND_V0 = 3.0             # 속력 가중 혼합의 교차속도 [m/s] — |course − 차체 heading| 중앙이 2~3 m/s 에서 1.2° 로 내려온다
+FLIP_V_MIN = 2.0           # 뒤집힘 판정에 쓸 최소 구간 속력 [m/s]
+FLIP_MIN_MOVE_M = 5.0      # 뒤집힘 판정에 필요한 최소 관측 이동거리 [m]
+
+
+def gauss_pad_smooth(x, sigma_steps=GAUSS_SIGMA_S / DT, fit=PAD_FIT, order=PAD_ORDER):
+    """(T,C) 배열을 가우시안으로 평활한다. 경계는 끝 `fit` 점에 맞춘 `order` 차 다항으로 외삽해 채운다.
+
+    창 밖을 반사·복제로 채우면 창 끝(= 예측 시작점, θ₀ 가 나오는 곳)의 회전이 죽는다.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    one_d = x.ndim == 1
+    if one_d:
+        x = x[:, None]
+    T = len(x)
+    r = int(np.ceil(3 * sigma_steps))
+    if T < max(fit, order + 1) or r < 1:
+        return x[:, 0].copy() if one_d else x.copy()
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma_steps) ** 2)
+    k /= k.sum()
+    t = np.arange(T, dtype=np.float64)
+    head = np.empty((r, x.shape[1])); tail = np.empty((r, x.shape[1]))
+    for c in range(x.shape[1]):
+        cf = np.polyfit(t[:fit], x[:fit, c], order)
+        head[:, c] = np.polyval(cf, np.arange(-r, 0, dtype=np.float64))
+        cb = np.polyfit(t[-fit:], x[-fit:, c], order)
+        tail[:, c] = np.polyval(cb, np.arange(T, T + r, dtype=np.float64))
+    xp = np.concatenate([head, x, tail], axis=0)
+    out = np.stack([np.convolve(xp[:, c], k, mode="valid") for c in range(x.shape[1])], axis=1)
+    return out[:, 0] if one_d else out
+
+
+def align_ref_gated(h_ref, h, obs=None, v_seg=None, v_min=FLIP_V_MIN, min_move=FLIP_MIN_MOVE_M,
+                    pos=None):
+    """align_ref 의 게이트 판. **실제로 움직인 구간**에서만 180° 뒤집힘을 판정한다.
+
+    정지 차량은 위치 잡음이 만든 방향으로 판정이 갈려(동전 던지기) 오히려 방향을 틀리게 만든다.
+    반환: (h_ref, flipped, judged) — judged=False 면 판정 자체를 안 한 것이다.
+    """
+    h_ref = np.asarray(h_ref, dtype=np.float64)
+    m = np.isfinite(h) & np.isfinite(h_ref)
+    if obs is not None:
+        m = m & obs
+    if v_seg is not None:
+        m = m & (np.asarray(v_seg, dtype=np.float64) >= v_min)
+    if pos is not None:
+        o = np.flatnonzero(obs) if obs is not None else np.arange(len(h_ref))
+        move = float(np.linalg.norm(np.diff(np.asarray(pos)[o], axis=0), axis=1).sum()) if len(o) > 1 else 0.0
+        if move < min_move:
+            return h_ref, False, False
+    if m.sum() < 3:
+        return h_ref, False, False
+    if np.median(np.abs(wrap(h_ref[m] - h[m]))) > np.pi / 2:
+        return wrap(h_ref + np.pi), True, True
+    return h_ref, False, True
+
+
+def build_heading_blend(pos, obs=None, h_ref=None, dt=DT, v0=BLEND_V0, jump_deg=JUMP_DEG):
+    """속력 가중 원형 혼합으로 h 를 만든다 — V_MIN 하드 스위치를 대신한다.
+
+        w = clip(v_seg / v0, 0, 1),  h = angle( w·e^{i·course} + (1−w)·e^{i·h_ref} )
+
+    빠를 때는 위치차분(course)뿐이라 지금과 같고, 느릴 때만 차체 heading 이 섞여 들어온다.
+    반환: h (T,), src (T,) 0=못 정함 / 1=혼합에서 course 우세(w≥0.5) / 2=차체 우세, w (T,)
+    """
+    pos = np.asarray(pos, dtype=np.float64)
+    T = len(pos)
+    obs = np.ones(T, bool) if obs is None else np.asarray(obs, bool)
+    idx = np.flatnonzero(obs)
+    course = np.full(T, np.nan)
+    v_seg = np.zeros(T)
+    for a, b in zip(idx[:-1], idx[1:]):
+        d = pos[b] - pos[a]
+        n = float(np.linalg.norm(d))
+        course[a] = np.arctan2(d[1], d[0])
+        v_seg[a] = n / ((b - a) * dt)
+    if len(idx) >= 2:                       # 마지막 관측점은 직전 값 복제 (전방차분이라 값이 없다)
+        course[idx[-1]], v_seg[idx[-1]] = course[idx[-2]], v_seg[idx[-2]]
+
+    h = np.array(course)
+    w = np.ones(T)
+    src = np.where(np.isfinite(course), 1, 0).astype(np.int8)
+    if h_ref is not None:
+        hr = guard(np.asarray(h_ref, dtype=np.float64), jump_deg)
+        hr, _, _ = align_ref_gated(hr, course, obs, v_seg, pos=pos)
+        w = np.clip(v_seg / float(v0), 0.0, 1.0)
+        both = obs & np.isfinite(course) & np.isfinite(hr)
+        z = w[both] * np.exp(1j * course[both]) + (1 - w[both]) * np.exp(1j * hr[both])
+        h[both] = np.angle(z)
+        only_ref = obs & ~np.isfinite(course) & np.isfinite(hr)
+        h[only_ref], w[only_ref] = hr[only_ref], 0.0
+        src = np.where(np.isfinite(h), np.where(w >= 0.5, 1, 2), 0).astype(np.int8)
+
+    good = np.flatnonzero(np.isfinite(h))          # 남은 구멍은 가장 가까운 값으로
+    if len(good):
+        miss = np.flatnonzero(obs & ~np.isfinite(h))
+        if len(miss):
+            j = good[np.abs(miss[:, None] - good[None, :]).argmin(axis=1)]
+            h[miss], src[miss] = h[j], 3
+    rest = obs & ~np.isfinite(h)
+    if rest.any():
+        h[rest], src[rest] = 0.0, 0
+    return h, src, w
+
+
+def ah_features_v3(pos_obs, head_obs, yaw0, dt=DT, step=1, skip=RAMP_SKIP,
+                   sigma_s=GAUSS_SIGMA_S, v0=BLEND_V0):
+    """v4 입력 (a, h) 의 **평활판**. step=1 이면 10 Hz(46스텝), step=5 면 2 Hz(10스텝).
+
+    지금 판과 다른 것 셋
+    --------------------
+    1. 위치를 **가우시안 σ=0.25 s** 로 평활한다(경계는 2차 외삽). 창 가장자리 램프(인덱스 0~3)는
+       평활 창에도 넣지 않고, 10 Hz 판은 아예 **버린다** — 첫 0.4 초는 위치차분 속력이 실제의 절반이라
+       |a| 가 9.9 m/s² 까지 튀는 인공물 구간이다.
+    2. h 를 V_MIN 하드 스위치가 아니라 **속력 가중 혼합**으로 만든다(교차속도 3 m/s).
+    3. 180° 뒤집힘 판정을 **실제로 움직인 구간**으로 제한한다(구간 속력 ≥ 2 m/s, 관측 이동 ≥ 5 m).
+
+    반환: feat (N,2) float32, h0 = 마지막 스텝의 진행방향(정규화 프레임, rad)
+    """
+    pos_obs = np.asarray(pos_obs, dtype=np.float64)
+    T = len(pos_obs)
+    sm = gauss_pad_smooth(pos_obs[skip:], sigma_steps=sigma_s / dt)
+    idx = np.arange(T - 1, skip - 1, -step)[::-1]              # 마지막 관측(정규화 원점)이 반드시 들어간다
+    p = sm[idx - skip]
+    dt_s = dt * step
+    m = mr.traj_to_motion(p, dt=dt_s, stop_ms=1.0, smooth=1)
+    a_ch = m.dv_kph / mr.DEFAULT_SCALES["dv_kph"]
+    h_ref = guard(np.asarray(head_obs, dtype=np.float64))[idx]  # 튐 가드는 10 Hz 스텝 기준이라 뽑기 전에
+    h_city, _, _ = build_heading_blend(p, h_ref=h_ref, dt=dt_s, v0=v0,
+                                       jump_deg=JUMP_DEG if step == 1 else 180.0)
+    h_n = wrap(h_city - float(yaw0))
+    return np.stack([a_ch, h_n], axis=1).astype(np.float32), float(h_n[-1])
+
+
 # ------------------------------------------------------------------ 차로 방향각 k
 def lane_field(graph, near_xy=None, near_m=120.0, step=STEP_M):
     """모든 차로 중심선을 등간격 점으로 펴서 (점, 접선각, 교차로여부) 로 쌓는다.

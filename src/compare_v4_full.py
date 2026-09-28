@@ -38,7 +38,10 @@ DATA_ROOT = "/data/argoverse2/motion_forecasting"
 # 입력 형태별 val 캐시. 키가 아니라 경로로 고정한다 — 캐시 키는 소스 파일 전체 해시라 주석만 고쳐도 바뀐다.
 # 두 캐시 모두 2026-09-17 코드(a8df67b)의 원본 전처리와 48개 대조를 통과했다.
 VAL_CACHE = {"ah2": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
-             "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988"}
+             "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988",
+             # 평활판(2026-09-29): 가우시안 σ0.25 + 속력 가중 혼합 + 뒤집힘 게이트, 10 Hz 는 램프 4스텝 제외(46스텝)
+             "ah3": "/data/argoverse2/cache/v4/val_24680ab01288f6db_n24988",
+             "ah3_2hz": "/data/argoverse2/cache/v4/val_db95e6d6e8e9c046_n24988"}
 OUT = f"{ROOT}/runs/v4_full_compare.json"
 RUNS = [
     ("v4_l0b_s0", "L0 5채널 50k"),
@@ -57,6 +60,9 @@ RUNS = [
     ("v4_l4nw_ah2_full_sm1_cos30_s0@ep30", "L4 10Hz·cos30 ep30"),
     ("v4_l4nw_ah2_2hz_full_sm1_cos30_s0", "L4 2Hz·cos30 best"),
     ("v4_l4nw_ah2_2hz_full_sm1_cos30_s0@ep30", "L4 2Hz·cos30 ep30"),
+    # 전처리 평활판 (2026-09-29) — 입력만 다르고 나머지 조건은 위 cos30 두 판과 같다
+    ("v4_l4nw_ah3_full_sm1_cos30_s0", "L4 10Hz·평활·cos30"),
+    ("v4_l4nw_ah3_2hz_full_sm1_cos30_s0", "L4 2Hz·평활·cos30"),
 ]
 
 

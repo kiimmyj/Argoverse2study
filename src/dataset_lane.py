@@ -31,7 +31,7 @@ from av2.datasets.motion_forecasting import scenario_serialization
 
 from dataset_map import OBS_LEN, PRED_LEN, N_LANES, N_PTS, _resample, _rotation_matrix
 import lane_frame as lf
-from heading_decomp import ah_features, ah_features_2hz, build_heading, wrap
+from heading_decomp import ah_features, ah_features_2hz, ah_features_v3, build_heading, wrap
 from lane_graph import LaneGraph, REACH_MARGIN_M
 
 import json
@@ -72,6 +72,10 @@ class Av2LaneRuleDataset(Dataset):
                   둘 다 관측 구간만 쓴다.
           "ah2_2hz"  같은 (a, h) 를 관측 위치 평활(Savitzky–Golay 0.5초) 뒤 2 Hz 로 뽑아 만든다 —
                   x 가 (10, 2). heading_decomp.ah_features_2hz. **입력만** 바뀌고 정답·경로·h0 는 그대로다.
+          "ah3" / "ah3_2hz"  평활판 (2026-09-29, heading_decomp.ah_features_v3). 위치를 가우시안 σ=0.25 s 로
+                  평활하고(경계 2차 외삽), h 를 속력 가중 혼합(교차속도 3 m/s)으로 만들며,
+                  180° 뒤집힘 판정을 실제로 움직인 구간으로 제한한다. 창 가장자리 램프(인덱스 0~3)는 버린다.
+                  x 가 (46, 2) / 2 Hz 판은 (10, 2). **h0 도 평활판 값**을 쓴다(적분기 시작 진행방향).
 
         fallback 은 지도가 경로를 하나도 못 주는 시나리오(val 의 3.75%)를 무엇으로 채울지다.
         세 값이 **서로 다른 두 가지를 가른다** — 폴백 기하와 모드 예산:
@@ -91,8 +95,8 @@ class Av2LaneRuleDataset(Dataset):
         self.theta_ch, self.h_src = theta_ch, h_src
         self.routes, self.n_modes = routes, n_modes
         self.fallback = fallback
-        if input_repr not in ("raw5", "ah2", "ah2_2hz"):
-            raise ValueError(f"input_repr 는 raw5 | ah2 | ah2_2hz 다: {input_repr}")
+        if input_repr not in ("raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz"):
+            raise ValueError(f"input_repr 는 raw5 | ah2 | ah2_2hz | ah3 | ah3_2hz 다: {input_repr}")
         if theta_ch and input_repr != "raw5":
             raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 계열은 이미 h 를 담는다")
         self.input_repr = input_repr
@@ -137,6 +141,11 @@ class Av2LaneRuleDataset(Dataset):
             elif self.input_repr == "ah2_2hz":
                 # h0(h_last) 는 위의 10 Hz 값을 그대로 쓴다 — 입력만 2 Hz 로 바꾸고 적분기 시작값은 건드리지 않는다
                 x = ah_features_2hz(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
+            elif self.input_repr in ("ah3", "ah3_2hz"):
+                # 평활판(2026-09-29): 가우시안 σ=0.25 s + 속력 가중 혼합 + 뒤집힘 판정 게이트.
+                # h0 도 평활판 10 Hz 값으로 바꾼다 — 적분기 시작 진행방향을 더 나은 추정으로 두는 것이 목적이다.
+                x, h_last = ah_features_v3(pos[:OBS_LEN], head[:OBS_LEN], float(theta),
+                                           step=1 if self.input_repr == "ah3" else 5)
         y = pos_n[OBS_LEN:]
 
         # --- 지도: 원본 JSON에서 직접 그래프를 만든다 ---
