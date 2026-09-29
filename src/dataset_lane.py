@@ -45,7 +45,14 @@ N_RPTS = 64                       # 경로 하나를 호길이 등간격 몇 점
 DEDUP_M = 2.5
 
 # 평활판 입력 이름 -> (다운샘플 간격, 가우시안 σ [s]). σ=0 은 평활 없이 나머지(혼합·게이트·램프 제외)만 바꾼 대조판이다.
-AH3_CFG = {"ah3": (1, 0.25), "ah3_2hz": (5, 0.25), "ah3n": (1, 0.0), "ah3s": (1, 0.15)}
+AH3_CFG = {                       # 이름 -> (다운샘플 간격, 가우시안 σ [s], 속력 가중 혼합, 램프 제외)
+    "ah3":     (1, 0.25, True,  True),
+    "ah3_2hz": (5, 0.25, True,  True),
+    "ah3n":    (1, 0.00, True,  True),    # 평활 없이 나머지만 — 평활의 몫을 가른다
+    "ah3s":    (1, 0.15, True,  True),    # 약한 평활
+    "ah3p":    (1, 0.15, False, False),   # 평활만 — heading 규칙과 램프는 지금 그대로
+    "ah3r":    (1, 0.15, True,  False),   # 평활 + 혼합, 램프는 남김 — 램프 제외의 몫을 가른다
+}
 
 
 def _at(route, s_query):
@@ -147,9 +154,9 @@ class Av2LaneRuleDataset(Dataset):
             elif self.input_repr in AH3_CFG:
                 # 평활판(2026-09-29): 가우시안 평활 + 속력 가중 혼합 + 뒤집힘 판정 게이트.
                 # h0 도 평활판 10 Hz 값으로 바꾼다 — 적분기 시작 진행방향을 더 나은 추정으로 두는 것이 목적이다.
-                st, sg = AH3_CFG[self.input_repr]
+                st, sg, bl, dr = AH3_CFG[self.input_repr]
                 x, h_last = ah_features_v3(pos[:OBS_LEN], head[:OBS_LEN], float(theta),
-                                           step=st, sigma_s=sg)
+                                           step=st, sigma_s=sg, blend=bl, drop_ramp=dr)
         y = pos_n[OBS_LEN:]
 
         # --- 지도: 원본 JSON에서 직접 그래프를 만든다 ---

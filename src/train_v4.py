@@ -159,7 +159,7 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
-    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz", "ah3n", "ah3s"],
+    ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz", "ah3n", "ah3s", "ah3p", "ah3r"],
                     help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향 / "
                          "ah2_2hz=같은 (a, h) 를 위치 평활 뒤 2 Hz 로 뽑은 10스텝, "
                          "ah3/ah3_2hz=평활판(가우시안 σ0.25 s + 속력 가중 혼합, 램프 4스텝 버림)")

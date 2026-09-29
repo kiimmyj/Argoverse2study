@@ -48,7 +48,7 @@ CACHE_ROOT = "/data/argoverse2/cache/v4"
 # (손으로 적은 목록에는 heading_decomp.py · dataset_map.py 가 빠져 있었다.)
 
 # 입력 형태별 x 길이. ah3 계열은 창 가장자리 램프(인덱스 0~3)를 버려 46스텝이다.
-X_LEN = {"raw5": 50, "ah2": 50, "ah2_2hz": 10, "ah3": 46, "ah3_2hz": 10, "ah3n": 46, "ah3s": 46}
+X_LEN = {"raw5": 50, "ah2": 50, "ah2_2hz": 10, "ah3": 46, "ah3_2hz": 10, "ah3n": 46, "ah3s": 46, "ah3p": 50, "ah3r": 50}
 def AH(name):
     return name.startswith("ah2") or name.startswith("ah3")
 

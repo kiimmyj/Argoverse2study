@@ -367,7 +367,7 @@ def build_heading_blend(pos, obs=None, h_ref=None, dt=DT, v0=BLEND_V0, jump_deg=
 
 
 def ah_features_v3(pos_obs, head_obs, yaw0, dt=DT, step=1, skip=RAMP_SKIP,
-                   sigma_s=GAUSS_SIGMA_S, v0=BLEND_V0):
+                   sigma_s=GAUSS_SIGMA_S, v0=BLEND_V0, blend=True, drop_ramp=True):
     """v4 입력 (a, h) 의 **평활판**. step=1 이면 10 Hz(46스텝), step=5 면 2 Hz(10스텝).
 
     지금 판과 다른 것 셋
@@ -382,16 +382,21 @@ def ah_features_v3(pos_obs, head_obs, yaw0, dt=DT, step=1, skip=RAMP_SKIP,
     """
     pos_obs = np.asarray(pos_obs, dtype=np.float64)
     T = len(pos_obs)
-    sm = (pos_obs[skip:].copy() if sigma_s <= 0            # sigma_s=0 이면 평활 없이 나머지만 바꾼다(대조판)
-          else gauss_pad_smooth(pos_obs[skip:], sigma_steps=sigma_s / dt))
-    idx = np.arange(T - 1, skip - 1, -step)[::-1]              # 마지막 관측(정규화 원점)이 반드시 들어간다
-    p = sm[idx - skip]
+    sm = pos_obs.copy()                                        # 평활은 램프(0~skip) 를 창에 넣지 않는다
+    if sigma_s > 0:                                            # sigma_s=0 이면 평활 없이 나머지만 바꾼다(대조판)
+        sm[skip:] = gauss_pad_smooth(pos_obs[skip:], sigma_steps=sigma_s / dt)
+    lo = skip if drop_ramp else 0                              # drop_ramp=False 면 램프 구간도 입력에 남긴다(대조판)
+    idx = np.arange(T - 1, lo - 1, -step)[::-1]                # 마지막 관측(정규화 원점)이 반드시 들어간다
+    p = sm[idx]
     dt_s = dt * step
     m = mr.traj_to_motion(p, dt=dt_s, stop_ms=1.0, smooth=1)
     a_ch = m.dv_kph / mr.DEFAULT_SCALES["dv_kph"]
     h_ref = guard(np.asarray(head_obs, dtype=np.float64))[idx]  # 튐 가드는 10 Hz 스텝 기준이라 뽑기 전에
-    h_city, _, _ = build_heading_blend(p, h_ref=h_ref, dt=dt_s, v0=v0,
-                                       jump_deg=JUMP_DEG if step == 1 else 180.0)
+    jd = JUMP_DEG if step == 1 else 180.0
+    if blend:
+        h_city, _, _ = build_heading_blend(p, h_ref=h_ref, dt=dt_s, v0=v0, jump_deg=jd)
+    else:                                                      # 대조판: 지금 쓰는 V_MIN 하드 스위치 + 옛 align_ref
+        h_city, _ = build_heading(p, h_ref=h_ref, dt=dt_s, v_min=V_MIN, jump_deg=jd)
     h_n = wrap(h_city - float(yaw0))
     return np.stack([a_ch, h_n], axis=1).astype(np.float32), float(h_n[-1])
 
