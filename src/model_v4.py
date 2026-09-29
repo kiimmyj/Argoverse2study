@@ -100,7 +100,7 @@ def route_point(routes: torch.Tensor, route_tan: torch.Tensor, s: torch.Tensor,
 class V4Net(nn.Module):
     def __init__(self, in_dim=5, lane_in=N_PTS * 2 + N_RULE, hid=HID, k=K,
                  pred_len=PRED_LEN, out_dim=2, route_pts=N_RPTS, level="l3",
-                 th0_mode="current"):
+                 th0_mode="current", agents_in=0):
         super().__init__()
         assert level in ("l2", "l3", "l0")
         assert th0_mode in ("current", "guard")
@@ -120,7 +120,16 @@ class V4Net(nn.Module):
         self.lane_encoder = nn.Sequential(
             nn.Linear(lane_in, hid), nn.ReLU(), nn.Linear(hid, hid))
         self.attn = nn.MultiheadAttention(hid, num_heads=4, batch_first=True)
-        self.fuse = nn.Sequential(nn.Linear(hid * 2, hid), nn.ReLU())
+
+        # --- 주변 차량 (2026-09-30, 사용자 지시 "일단 단순하게: 반경 30 m") ---
+        # 차량 하나를 (T'×5) 로 펴서 MLP 로 임베딩하고, focal 궤적 특징을 질의로 attention 집약한다.
+        # 슬롯이 하나도 안 남는 장면(반경 안에 아무도 없음)이 있으므로 마스크 처리를 반드시 한다.
+        self.agents_in = int(agents_in)
+        if self.agents_in:
+            self.agent_encoder = nn.Sequential(
+                nn.Linear(self.agents_in, hid), nn.ReLU(), nn.Linear(hid, hid))
+            self.agent_attn = nn.MultiheadAttention(hid, num_heads=4, batch_first=True)
+        self.fuse = nn.Sequential(nn.Linear(hid * (3 if self.agents_in else 2), hid), nn.ReLU())
 
         if level == "l2":
             self.traj_head = nn.Linear(hid, k * pred_len * out_dim)
@@ -177,7 +186,8 @@ class V4Net(nn.Module):
     # ------------------------------------------------------------------
     def forward(self, x, lanes, lane_mask, lane_feat=None, routes=None,
                 route_tan=None, route_band=None, route_len=None,
-                route_sd0=None, route_mask=None, route_sub=None, v0=None, h0=None):
+                route_sd0=None, route_mask=None, route_sub=None, v0=None, h0=None,
+                agents=None, agents_mask=None):
         B = x.size(0)
         _, (h, _) = self.traj_encoder(x)
         traj_feat = h[-1]
@@ -190,7 +200,22 @@ class V4Net(nn.Module):
         lane_emb = self.lane_encoder(lane_in)
         attn_out, _ = self.attn(traj_feat.unsqueeze(1), lane_emb, lane_emb,
                                 key_padding_mask=(lane_mask == 0))
-        fused = self.fuse(torch.cat([traj_feat, attn_out.squeeze(1)], dim=1))
+        parts = [traj_feat, attn_out.squeeze(1)]
+        if self.agents_in:
+            if agents is None:
+                raise ValueError("주변 차량 입력(agents)이 필요한 모델이다")
+            A = agents.reshape(agents.size(0), agents.size(1), -1)     # (B,K_a,T'*5)
+            a_emb = self.agent_encoder(A)
+            kpm = (agents_mask == 0)
+            # 반경 안에 아무도 없는 장면은 전부 마스크라 softmax 가 NaN 이 된다.
+            # 첫 슬롯만 열어 두면 그 슬롯의 특징이 0 이라 출력도 0 에 가깝다.
+            empty = kpm.all(dim=1)
+            if empty.any():
+                kpm = kpm.clone()
+                kpm[empty, 0] = False
+            a_out, _ = self.agent_attn(traj_feat.unsqueeze(1), a_emb, a_emb, key_padding_mask=kpm)
+            parts.append(a_out.squeeze(1))
+        fused = self.fuse(torch.cat(parts, dim=1))
 
         if self.level == "l2":
             traj = self.traj_head(fused).view(B, self.k, self.pred_len, self.out_dim)

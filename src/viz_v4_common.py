@@ -26,7 +26,12 @@ VAL_DIR = DATA_ROOT / "val"
 # 캐시 키는 소스 파일 전체 해시라 주석만 고쳐도 바뀐다. 두 캐시는 x 만 다르고 나머지 18개 필드는
 # 비트 단위로 같다(2026-09-17 전수 대조) — 그래서 원본 파생량·상황 분류는 어느 캐시로 만들어도 같다.
 VAL_CACHES = {"ah2": Path("/data/argoverse2/cache/v4/val_e67373005962be8a_n24988"),       # x (50, 2)
-              "ah2_2hz": Path("/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988")}   # x (10, 2)
+              "ah2_2hz": Path("/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988"),   # x (10, 2)
+              # 평활판(2026-09-29). compare_v4_full.VAL_CACHE 와 같은 경로. 2026-09-30 전수 대조:
+              # x 와 h0 만 다르고 나머지 17개 필드(경로·밴드·정답·원점·회전)는 ah2 캐시와 비트 단위로 같다.
+              "ah3": Path("/data/argoverse2/cache/v4/val_24680ab01288f6db_n24988"),       # x (46, 2)
+              "ah3_2hz": Path("/data/argoverse2/cache/v4/val_db95e6d6e8e9c046_n24988"),   # x (10, 2)
+              "ah3s": Path("/data/argoverse2/cache/v4/val_4191c8df5dae331c_n24988")}      # x (46, 2) σ0.15
 VAL_CACHE = VAL_CACHES["ah2"]          # 주 모델(ah2) 기본값 — 다른 입력은 val_cache_for() 로 고른다
 RUNS = ROOT / "runs"
 VIZ_ROOT = ROOT / "viz" / "v4"

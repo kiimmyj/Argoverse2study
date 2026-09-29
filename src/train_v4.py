@@ -44,6 +44,9 @@ def to_dev(b, device, level, use_rules):
               lane_feat=b["lane_feat"].to(device) if use_rules else None)
     if level != "l2":
         kw.update({k: b[k].to(device) for k in ROUTE_KEYS})
+    if "agents" in b:
+        kw["agents"] = b["agents"].to(device)
+        kw["agents_mask"] = b["agents_mask"].to(device)
     return kw
 
 
@@ -83,6 +86,29 @@ def jitter_steps(aux):
     ua = aux["a"] / A_SCALE
     ut = aux["dtheta"] / DTHETA_MAX
     return (ua[..., 1:] - ua[..., :-1]) ** 2 + (ut[..., 1:] - ut[..., :-1]) ** 2
+
+
+def jitter_xy(traj, mode_mask, thresh_deg=LABEL_DTHETA_DEG, v_min=1.0, dt=0.1):
+    """**예측 좌표**에서 복원한 진행방향의 스텝 변화가 라벨 상한을 넘는 만큼만 벌한다 (2026-09-30).
+
+    왜 이 형태인가 — 2026-09-29 측정: 지금 벌점이 누르는 dθ 를 통째로 지워도 좌표 기준 위반율이
+    0.735% → 0.733% 로 **0.3% 밖에 안 움직인다**. 좌표 방향 변화는 Δψ = Δθ + Δk(경로 곡률) + 기하 보정이고
+    주항은 기하다. 즉 지금 벌점은 궤적에 거의 나타나지 않는 변수를 누르고 있다.
+    문헌도 같은 방향이다 — 매끄러움·실현성 지표는 전부 좌표에서 나온다(WOSAC, PTNet, MultiPath++ TRI-c,
+    Greer YawLoss). 모델 내부 출력에 건 지표는 구성상 항등식이 되기 쉽다(MultiPath++ TRI-h 0.00% ↔ TRI-c 1.22%).
+
+    정지 구간은 방향이 정의되지 않으므로 **양쪽 스텝 속력이 v_min 이상일 때만** 센다(평가 지표와 같은 규칙).
+    힌지라 임계 안에서는 0 이다 — 실제 회전은 누르지 않는다.
+    """
+    d = traj[..., 1:, :] - traj[..., :-1, :]                      # (B,K,T-1,2)
+    sp = d.norm(dim=-1) / dt
+    psi = torch.atan2(d[..., 1], d[..., 0])
+    dpsi = torch.remainder(psi[..., 1:] - psi[..., :-1] + np.pi, 2 * np.pi) - np.pi
+    lim = float(np.radians(thresh_deg))
+    over = (dpsi.abs() - lim).clamp(min=0) / lim                  # 임계 초과분만, 무차원
+    ok = ((sp[..., 1:] >= v_min) & (sp[..., :-1] >= v_min)).float()
+    m = mode_mask.unsqueeze(-1) * ok
+    return (over ** 2 * m).sum() / m.sum().clamp(min=1)
 
 
 def jitter(aux, mode_mask):
@@ -159,6 +185,12 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
+    ap.add_argument("--agents", type=int, default=0,
+                    help="1 이면 주변 차량(가까운 32대 과거 궤적)을 입력에 붙인다")
+    ap.add_argument("--agents-radius", dest="agents_radius", type=float, default=30.0,
+                    help="주변 차량 반경 [m] — 사용자가 고른 단순 기준")
+    ap.add_argument("--agents-step", dest="agents_step", type=int, default=5,
+                    help="주변 차량 과거를 몇 스텝마다 뽑을지 (5 = 2 Hz)")
     ap.add_argument("--input", default="raw5", choices=["raw5", "ah2", "ah2_2hz", "ah3", "ah3_2hz", "ah3n", "ah3s", "ah3p", "ah3r"],
                     help="raw5=(x,y,vx,vy,h_AV2) / ah2=(a, h) 2채널, h 는 위치차분 진행방향 / "
                          "ah2_2hz=같은 (a, h) 를 위치 평활 뒤 2 Hz 로 뽑은 10스텝, "
@@ -210,6 +242,17 @@ def main():
     else:
         tr = Av2LaneRuleDataset(DATA_ROOT, "train", lim, **dkw)
         va = Av2LaneRuleDataset(DATA_ROOT, "val", args.val_limit, **dkw)
+    agents_in = 0
+    if args.agents:
+        # 주변 차량을 붙인다 (2026-09-30). 전처리는 이미 구워 둔 캐시를 쓴다 —
+        # t=0 에 관측되는 가까운 32대 · 과거 50스텝 · focal 프레임 · 미래 미사용.
+        from dataset_agents import attach_agents
+        tr, dtr = attach_agents(tr, "train", len(tr), radius_m=args.agents_radius, step=args.agents_step)
+        va, dva = attach_agents(va, "val", len(va), radius_m=args.agents_radius, step=args.agents_step)
+        agents_in = len(tr.store.idx) * 5
+        print(f"[agents] train {dtr}\n[agents] val   {dva}\n"
+              f"[agents] 반경 {args.agents_radius:g} m · {len(tr.store.idx)}스텝 · 채널 5 → {agents_in}", flush=True)
+
     g = torch.Generator(); g.manual_seed(args.seed)
     tl = DataLoader(tr, batch_size=args.batch, shuffle=True, generator=g,
                     num_workers=args.workers, drop_last=True, persistent_workers=True)
@@ -218,7 +261,8 @@ def main():
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
     in_dim = (2 if args.input.startswith(("ah2", "ah3")) else 5) + (3 if args.theta else 0)
-    model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0).to(device)
+    model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0,
+                  agents_in=agents_in).to(device)
     npar = sum(p.numel() for p in model.parameters())
     print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "
           f"fallback {args.fallback} | input {args.input} | th0 {args.th0} | in_dim {in_dim} "
@@ -239,10 +283,13 @@ def main():
                   else torch.ones(traj.shape[:2], device=device))
             loss, off = loss_fn(traj, logits, y, mm, aux, args.offlane,
                                 bool(args.off_nonwinner))
-            if args.smooth > 0 and aux:
+            if args.smooth > 0 and aux and args.smooth_mode in ("action", "both"):
                 sm = jitter(aux, mm)
                 loss = loss + args.smooth * sm
                 rsm += float(sm.detach()) * y.size(0)
+            if args.smooth_mode in ("xy", "both") and args.smooth_xy > 0:
+                # 좌표 기준 힌지 — 지금 벌점이 누르는 dθ 는 실제 궤적 방향 변화의 0.3% 만 설명한다(2026-09-29 측정)
+                loss = loss + args.smooth_xy * jitter_xy(traj, mm)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step()
