@@ -66,9 +66,9 @@ FLAGS = {
                         lambda d: np.isin(d["f_type"], list(WALK_TYPES))),
 }
 # 겹침 표에 쓸 대표 플래그 (전부 쓰면 15x15 라 안 읽힌다)
-KEY_FLAGS = ["A1 경로없음", "A2 차로밖(한 스텝이라도)", "A2 도로밖(절반 이상)", "A3 커버리지 실패",
-             "B1 focal 라벨 뒤집힘", "B2 focal 전처리 뒤집기", "B3 ±pi 점프(우리 h)",
-             "B4 focal 방향 미정의", "B5 속도 불일치 절반↑"]
+KEY_FLAGS = ["F focal 이 보행자·자전거", "A1 경로없음", "A2 차로밖(한 스텝이라도)", "A2 도로밖(절반 이상)",
+             "A3 커버리지 실패", "B1 focal 라벨 뒤집힘", "B2 focal 전처리 뒤집기",
+             "B3 ±pi 점프(우리 h)", "B4 focal 방향 미정의", "B5 속도 불일치 절반↑"]
 # '버릴 수 없는 것' — 데이터 생성 방식에서 오는 것이라 걸러내면 모집단이 통째로 사라진다
 NOT_DROPPABLE = ["창 가장자리 속도 램프", "정지·저속 트랙의 방향 미정의", "AV2 heading 의 슬립각"]
 
@@ -216,6 +216,53 @@ def cause_table(D):
     return out
 
 
+# 이미 학습된 판의 시나리오별 점수 — '버리면 무엇을 잃나'를 정확도로 읽기 위해 붙인다.
+# 읽기 전용이며 학습하지 않는다. 없으면 이 절은 통째로 건너뛴다.
+SCORE_TAG = "v4_l4nw_ah2_2hz_full_sm1_cos30_s0"
+SCORE_PARQUET = REPO / "viz/v4" / SCORE_TAG / "data/scenarios.parquet"
+
+
+def score_join(D):
+    if "val" not in D or not SCORE_PARQUET.exists():
+        return None
+    import pandas as pd
+    df = pd.read_parquet(SCORE_PARQUET)[["sid", "minade", "minfde", "cls", "dh6"]]
+    d = D["val"]
+    c = pd.DataFrame({"sid": d["sid"], "f_type": d["f_type"], "cause": d["cause"],
+                      **{k: d[k] for k in ("route_none", "coverage", "f_flip_av2", "f_undef")}})
+    m = df.merge(c, on="sid")
+    if len(m) == 0:
+        return None
+    base = float(m.minade.mean())
+    groups = {"전체": np.ones(len(m), bool),
+              "보행자·자전거 focal": m.f_type.isin(list(WALK_TYPES)).to_numpy(),
+              "차량 계열 focal": m.f_type.isin(list(ROAD_TYPES)).to_numpy(),
+              "A1 경로없음": (m.route_none == 1).to_numpy(),
+              "A3 커버리지 실패": (m.coverage == 0).to_numpy(),
+              "A3 커버리지 성공": (m.coverage == 1).to_numpy(),
+              "B1 focal 라벨 뒤집힘": (m.f_flip_av2 == 1).to_numpy(),
+              "B4 focal 방향 미정의": (m.f_undef == 1).to_numpy()}
+    out = {"태그": SCORE_TAG, "n": int(len(m)), "전체 minADE6": round(base, 4), "집단": {}, "빼면": {},
+           "커버리지 실패 원인별": {}}
+    for k, sel in groups.items():
+        s = m[sel]
+        out["집단"][k] = {"n": int(len(s)), "minADE6": round(float(s.minade.mean()), 4),
+                        "minFDE6": round(float(s.minfde.mean()), 4),
+                        "miss%": round(float((s.minfde > 2).mean() * 100), 2)}
+        if k != "전체":
+            rest = m[~sel]
+            out["빼면"][k] = {"남는 n": int(len(rest)),
+                             "남는 minADE6": round(float(rest.minade.mean()), 4),
+                             "변화": round(float(rest.minade.mean() - base), 4)}
+    for i in range(1, len(CAUSE)):
+        s = m[(m.coverage == 0) & (m.cause == i)]
+        if len(s):
+            out["커버리지 실패 원인별"][CAUSE[i]] = {
+                "n": int(len(s)), "minADE6": round(float(s.minade.mean()), 4),
+                "miss%": round(float((s.minfde > 2).mean() * 100), 2)}
+    return out
+
+
 def overlap(D):
     """대표 플래그끼리의 교집합 (건수와, 행 플래그 대비 비율)."""
     out = {}
@@ -282,6 +329,9 @@ def main():
          "겹침": overlap(D),
          "버릴 때 잃는 양": drop_cost(D),
          "버릴 수 없는 것": NOT_DROPPABLE}
+    sc = score_join(D)
+    if sc:
+        S["학습된 판의 점수 (val)"] = sc
     for sp, d in D.items():
         m = d["f_ramp_ok"].astype(bool)
         S.setdefault("창 가장자리 램프", {})[sp] = {
@@ -294,6 +344,10 @@ def main():
         ids = {}
         for name, (_, fn) in FLAGS.items():
             m = fn(d)
+            if m.sum() > 50000:      # 걸러낼 후보가 아닌 대량 플래그는 목록을 안 적는다 (npz 로 다시 만들 수 있다)
+                ids[name] = {"n": int(m.sum()), "예시": [str(x) for x in d["sid"][m][:200]],
+                             "비고": f"5만 건이 넘어 목록 생략 — census_{sp}.npz 로 재현할 수 있다"}
+                continue
             ids[name] = [str(x) for x in d["sid"][m]]
         ids["A3 커버리지 실패 원인별"] = {
             CAUSE[i]: [str(x) for x in d["sid"][(d["coverage"] == 0) & (d["cause"] == i)]]
@@ -346,6 +400,13 @@ def main():
         print(f"{k:<{w3}}" + "".join(
             f"{S['버릴 때 잃는 양'][sp][k]['n']:>12,}{S['버릴 때 잃는 양'][sp][k]['pct']:>8.2f}%"
             for sp in D))
+    if sc:
+        print(f"\n=== 학습된 판({sc['태그']})의 val 점수로 본 '버리면 무엇을 잃나' ===")
+        print(f"{'집단':<22}{'n':>8}{'minADE6':>10}{'miss%':>8}   빼면 남는 minADE6")
+        for k, v in sc["집단"].items():
+            tail = "" if k == "전체" else (f"   {sc['빼면'][k]['남는 minADE6']:.4f} "
+                                          f"({sc['빼면'][k]['변화']:+.4f})")
+            print(f"{k:<22}{v['n']:>8,}{v['minADE6']:>10.3f}{v['miss%']:>7.1f}%{tail}")
     print(f"\nwrote {DATA / 'summary.json'} / ids_*.json")
 
 

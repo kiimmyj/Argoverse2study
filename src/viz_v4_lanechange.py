@@ -42,8 +42,9 @@ BASE_DUMP = C.VIZ_ROOT / "v4_l4nw_ah2_full_s0" / "data"
 LC_D_M = 2.5          # [m] 정답 기준 경로 대비 6초 횡이동 |Δd6| 이 이상이면 '횡이동 있음'
 LC_HEAD_DEG = 15.0    # [deg] |Δh6| 이 미만이어야 차선변경 (그 이상은 회전)
 LC_HEAD_WIDE = 30.0   # [deg] 넓은 정의 (곡선 도로 위 차선변경까지)
-LC_START_OBS_M = 1.0  # [m] 관측 구간에 이미 이만큼 옆으로 갔으면 '이미 시작'
-LC_NEW_OBS_M = 0.5    # [m] 관측 구간 횡이동이 이 미만이면 '예측 구간에서 새로 시작'
+LC_START_OBS_M = 1.0  # [m] 관측 마지막 2초에 이미 이만큼 옆으로 갔으면 '이미 시작'
+LC_NEW_OBS_M = 0.5    # [m] 그 값이 이 미만이면 '예측 구간에서 새로 시작'
+LC_OBS_SEC = 2.0      # [s] 관측 쪽 횡이동을 재는 창 (경로가 과거를 안 덮으므로 d 대신 진행방향으로 잰다)
 UTURN_DEG = 135.0     # [deg] 6초 방향 변화 이 이상이면 U턴
 HALF_W = 1.75         # [m] 기본 밴드 (lane_frame.LANE_HALF_W)
 WIDE_W = 3.6          # [m] 차선변경 허용·교차로 밴드 (lane_frame.WIDE_HALF_W)
@@ -114,9 +115,10 @@ def scan_one(task):
     """시나리오 하나의 정답 쪽 양. 모델을 전혀 쓰지 않는다."""
     import lane_frame as lf
     from lane_graph import LaneGraph, Move
-    i, sid, g_idx, pos, h = task
+    i, sid, g_idx, pos, h, v_f = task
     pos = np.asarray(pos, np.float64)
     h = np.asarray(h, np.float64)
+    v_f = np.asarray(v_f, np.float64)
     nd = max(int(_W["n_distinct"][i]), 1)
     theta = float(_W["theta"][i])
     origin = np.asarray(_W["origin"][i], np.float64)
@@ -139,6 +141,22 @@ def scan_one(task):
     if d_g is None:                       # 방어 (gt_route 가 nd 밖일 수 없다)
         d_g = np.zeros(len(pos)); s_g = np.zeros(len(pos))
         bl_g = np.full(len(pos), HALF_W); br_g = np.full(len(pos), HALF_W)
+
+    # --- 관측 구간 횡이동: 경로에 의존하지 않는 방식
+    # 후보 경로는 현재 위치에서 시작하므로 과거 위치의 s 가 음수인 시나리오가 D2 의 76% 다
+    # (창 시작 기준). 그 구간의 d 는 '경로 시작점까지의 수직거리' 라 ±30 m 까지 튄다.
+    # 그래서 관측 쪽은 d 대신 **현재 차로 방향 k(s0) 대비 진행방향**으로 잰다:
+    #   lat_obs = Σ v(t)·sin(h(t) − k0)·dt,  t ∈ [−LC_OBS_SEC, 0]
+    idx0 = np.clip(float(_W["route_sd0"][i, g_idx, 0]) / max(float(_W["route_len"][i, g_idx]), 1e-3)
+                   * (64 - 1), 0.0, 64 - 1 - 1e-4)
+    j0 = int(np.floor(idx0)); fr = idx0 - j0
+    tg0 = (np.asarray(_W["route_tan"][i, g_idx], np.float64)[j0] * (1 - fr)
+           + np.asarray(_W["route_tan"][i, g_idx], np.float64)[min(j0 + 1, 63)] * fr)
+    k0 = float(np.arctan2(tg0[1], tg0[0]))
+    n_obs = int(round(LC_OBS_SEC / C.DT))
+    sl_obs = slice(C.OBS - 1 - n_obs, C.OBS)
+    lat_obs = float((v_f[sl_obs] * np.sin(C.wrap(h[sl_obs] - k0)) * C.DT).sum())
+    th0_true = float(C.wrap(h[C.OBS - 1] - k0))
 
     # --- 차선변경 진행 곡선 (110스텝 전체)
     d_a = d_g[:5].mean()                                # 창 시작 (−4.9 s)
@@ -183,6 +201,8 @@ def scan_one(task):
     inter0 = bool(gr.lanes[l0].is_intersection) if l0 in gr.lanes else False
 
     row = dict(idx=i, dd_full=dd_full, dd_obs=dd_obs, dd6_r=dd6, d0_g=d_0, d_a=d_a, d_e=d_e,
+               lat_obs=lat_obs, th0_true=th0_true, k0=k0, s_obs_start=float(s_g[0]),
+               s_obs_2s=float(s_g[C.OBS - 1 - n_obs]),
                t10=t10, t90=t90, over175=over175, over_rule=over_rule, over36=over36,
                band_at_max=band_at_max, wide_frac=wide_frac,
                lane0=l0, lane1=l1, n_lat_map=n_lat, rule_lc=rule_ok, inter0=inter0,
@@ -208,9 +228,10 @@ def step_scan(a):
     sids = list(df["sid"][:N])
     pos = raw["pos"][:N].astype(np.float64)
     hh = raw["h"][:N].astype(np.float64)
+    vv = raw["v_fld"][:N].astype(np.float64)
     gidx = df["gt_route"].to_numpy()[:N]
 
-    tasks = [(i, sids[i], int(gidx[i]), pos[i], hh[i]) for i in range(N)]
+    tasks = [(i, sids[i], int(gidx[i]), pos[i], hh[i], vv[i]) for i in range(N)]
     rows, arrs = [None] * N, [None] * N
     with Pool(a.workers, initializer=_init_scan, initargs=(str(C.VAL_CACHES["ah2"]),)) as pool:
         for k, (r_, ar) in enumerate(pool.imap(scan_one, tasks, chunksize=16)):
@@ -238,8 +259,8 @@ def step_scan(a):
     defs["D4_횡이동_지도일치"] = defs["D2_횡이동"] & (G["n_lat_map"].to_numpy() >= 1)
     uni = defs["D1_분류"] | defs["D2_횡이동"] | defs["D3_지도차로"]
     defs["U_합집합"] = uni
-    obsd = np.abs(G["dd_obs"].to_numpy())
-    same = np.sign(G["dd_obs"].to_numpy()) == np.sign(G["dd6_r"].to_numpy())
+    obsd = np.abs(G["lat_obs"].to_numpy())
+    same = np.sign(G["lat_obs"].to_numpy()) == np.sign(G["dd6_r"].to_numpy())
     started = uni & (obsd >= LC_START_OBS_M) & same
     fresh = uni & (obsd < LC_NEW_OBS_M)
     defs["S_관측중시작"] = started
@@ -258,7 +279,7 @@ def step_scan(a):
     (DATA / "gt_groups.json").write_text(json.dumps(
         {"n_val": N, "base_dump": str(BASE_DUMP), "git_head": C.git_head(),
          "thresholds": {k: globals()[k] for k in ("LC_D_M", "LC_HEAD_DEG", "LC_HEAD_WIDE",
-                                                 "LC_START_OBS_M", "LC_NEW_OBS_M", "UTURN_DEG",
+                                                 "LC_START_OBS_M", "LC_NEW_OBS_M", "LC_OBS_SEC", "UTURN_DEG",
                                                  "HALF_W", "WIDE_W", "ROUTE_COVER_M", "DD_HIT_FRAC")},
          "dd6_recheck_max_diff_m": chk, "counts": counts, "groups": groups},
         indent=1, ensure_ascii=False))
@@ -294,6 +315,9 @@ def step_infer(a):
         keep = {i: j for j, i in enumerate(sub)}
         TR = np.zeros((len(sub), K, T, 2), np.float32)
         DD = np.zeros((len(sub), K, T), np.float32)       # 모델 d (자기 경로 기준)
+        TH = np.zeros((len(sub), K, T), np.float32)       # 잔차각 θ [rad]
+        VV = np.zeros((len(sub), K, T), np.float32)       # 속력
+        BD = np.zeros((len(sub), K, T, 2), np.float32)    # 밴드 (좌, 우)
         exc = live = jt = ja = 0.0
         i0 = 0
         with torch.no_grad():
@@ -339,10 +363,12 @@ def step_infer(a):
                 S["winner"][sl] = cpu(winner).astype(np.int16)
                 S["top1"][sl] = cpu(logits.argmax(1)).astype(np.int16)
                 tj, dcpu = cpu(traj), cpu(aux["d"])
+                thc, vc, bdc = cpu(th), cpu(aux["v"]), cpu(aux["band"])
                 for bi in range(B):
                     j = keep.get(i0 + bi)
                     if j is not None:
                         TR[j], DD[j] = tj[bi], dcpu[bi]
+                        TH[j], VV[j], BD[j] = thc[bi], vc[bi], bdc[bi]
                 i0 += B
         assert i0 == N
         got = {"minADE6": float(S["minade"].astype(np.float64).mean()),
@@ -375,8 +401,8 @@ def step_infer(a):
             pd_ = np.stack(pool.map(_proj_one, tasks, chunksize=8))
         print(f"[{tag}] 투영 {len(sub)}개 {time.time() - t1:.0f}s", flush=True)
         np.savez(DATA / f"pred_{tag}.npz", sub=sub, traj_sub=TR, d_sub=DD, proj_d_sub=pd_,
-                 **P, **S)
-        del P, S, TR, DD, pd_, model
+                 th_sub=TH, v_sub=VV, band_sub=BD, **P, **S)
+        del P, S, TR, DD, TH, VV, BD, pd_, model
         if device == "cuda":
             torch.cuda.empty_cache()
     p = DATA / "infer_verify.json"

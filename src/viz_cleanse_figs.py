@@ -220,7 +220,7 @@ def fig_c3(D, plt):
             vals[sp] = [100.0 * (d["coverage"][road & (b == i)] == 0).mean()
                         if (road & (b == i)).any() else 0.0 for i in range(len(labs))]
             ns[sp] = [int((road & (b == i)).sum()) for i in range(len(labs))]
-        bar_pairs(ax, labs, vals, ns, list(D), horiz=False, fs=6.4)
+        bar_pairs(ax, labs, vals, ns, list(D), horiz=False, fs=5.9)
         ax.set_xlabel(xlab); ax.set_ylabel("커버리지 실패 [%]")
         ax.set_title(title + " — 차량 계열 focal 만")
         ax.set_ylim(0, max(max(vals[sp]) for sp in D) * 1.35)
@@ -242,7 +242,7 @@ def fig_c4(D, plt):
             t = T[sp]["이동거리별 뒤집힘"][grp]
             vals[sp] = [t[k]["뒤집힘%"] for k in PATH_LBL]
             ns[sp] = [t[k]["판정가능"] for k in PATH_LBL]
-        bar_pairs(ax, PATH_LBL, vals, ns, list(D), horiz=False, fs=6.4)
+        bar_pairs(ax, PATH_LBL, vals, ns, list(D), horiz=False, fs=5.5)
         ax.set_xlabel("트랙 총 이동거리")
         ax.set_ylabel("AV2 heading 이 이동방향과 180° [%]")
         ax.set_title(title + "  (n = 판정 가능한 트랙)")
@@ -256,7 +256,7 @@ def fig_c4(D, plt):
         t = T[sp]["이동거리별 뒤집힘"]["차량 계열"]
         vals[sp] = [t[k]["판정불가%"] for k in PATH_LBL]
         ns[sp] = [t[k]["트랙"] for k in PATH_LBL]
-    bar_pairs(ax, PATH_LBL, vals, ns, list(D), horiz=False, fs=6.4)
+    bar_pairs(ax, PATH_LBL, vals, ns, list(D), horiz=False, fs=5.5)
     ax.set_xlabel("트랙 총 이동거리"); ax.set_ylabel("판정 불가 [%]")
     ax.set_title("(c) 안 움직인 트랙은 '이동방향' 자체가 없다 (차량 계열)")
     ax.set_ylim(0, 105)
@@ -277,7 +277,7 @@ def fig_c4(D, plt):
     bar_pairs(ax, labs, vals, ns, list(D), horiz=False, fs=6.2)
     ax.set_ylabel("트랙 비율 [%]")
     ax.set_title("(d) align_ref 의 뒤집기는 대부분 차로 반대로 간다 = 틀렸다")
-    ax.set_ylim(0, max(max(vals[sp]) for sp in D) * 1.35)
+    ax.set_ylim(0, 108)
     ax.legend(fontsize=7.6)
     fig.suptitle("B1·B2. heading 180° 뒤집힘 — 주변 차량 트랙 전수", y=0.995, fontsize=12.5)
     fig.tight_layout(rect=(0, 0, 1, 0.985))
@@ -424,7 +424,7 @@ def pick_cases(D):
         (first(d["route_none"].astype(bool) & veh & (d["move6"] > 20), "move6"),
          "A1 경로 없음", "지도가 후보 경로를 못 준다 — 직진 폴백 1개로 때우는 장면"),
         (first(walk & (d["coverage"] == 0), "move6"),
-         "F focal 이 보행자", "차로 위 (s, d) 출력 공간이 성립하지 않는 대상"),
+         "F focal 이 보행자·자전거", "차로 위 (s, d) 출력 공간이 성립하지 않는 대상"),
         (first((d["coverage"] == 0) & (d["cause"] == 6) & veh & (d["move6"] > 20), "gt_maxd"),
          "A3 밴드만 초과", "경로는 맞는데 정답이 규칙 밴드 밖으로 나간다"),
         (first((d["coverage"] == 0) & (d["cause"] == 2) & veh, "move6"),
@@ -432,7 +432,7 @@ def pick_cases(D):
         (first(d["f_flip_av2"].astype(bool) & (d["move6"] > 10), "move6"),
          "B1 focal 라벨 뒤집힘", "AV2 heading 이 이동방향과 180° 어긋난 focal"),
         (first((d["far_obs"] + d["far_fut"] > 60) & veh, "move6"),
-         "A2 차로 밖", "주차장·미매핑 노면 — 중심선에서 5 m 밖"),
+         "A2 차로 밖", "주차 구획·미매핑 노면 — 중심선에서 5 m 밖"),
     ]
     for i, (j, t, desc) in enumerate(cand):
         if j is not None:
@@ -500,17 +500,26 @@ def fig_c7(D, plt):
         ax.plot(pn[OBS - 1::10, 0], pn[OBS - 1::10, 1], ls="none", zorder=10,
                 **C.step_kw(2, C.C_GT))
         C.draw_box(ax, pn[OBS - 1, 0], pn[OBS - 1, 1], 0.0, C.C_ORANGE, zorder=11)
+        # 정규화 프레임이라 AV2 heading 은 **항상 +x** 다(주황 상자). 이동방향 화살표와 어긋나면 그게 뒤집힘이다.
+        hn, _ = build_heading(pos[:OBS], h_ref=hav2[:OBS])
+        a_ = float(hn[-1] - theta)
+        L = 0.11 * (xlim[1] - xlim[0])
+        ax.annotate("", xy=(pn[OBS - 1, 0] + L * np.cos(a_), pn[OBS - 1, 1] + L * np.sin(a_)),
+                    xytext=(pn[OBS - 1, 0], pn[OBS - 1, 1]), zorder=12,
+                    arrowprops=dict(arrowstyle="-|>", color=C.C_VIOLET, lw=1.8,
+                                    shrinkA=0, shrinkB=0))
         ax.set_xlim(xlim); ax.set_ylim(ylim); ax.set_aspect("equal")
         ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
         C.scale_bar(ax, xlim, ylim)
         d = D[sp]
-        ax.set_title(f"{title}\n{sid[:8]} · {desc}\n"
+        ax.set_title(f"{title}\n{sid[:8]} · {TYPE_NAME.get(int(d['f_type'][j]), '?')} · {desc}\n"
                      f"경로 {len(rts)}개 · 6초 이동 {d['move6'][j]:.0f} m · "
                      f"최대|d| {d['gt_maxd'][j]:.1f} m · 차로밖 {int(d['far_obs'][j] + d['far_fut'][j])}/110 스텝",
                      fontsize=8.6)
     axes[0, 0].legend(fontsize=7.6, loc="upper left")
-    fig.suptitle("대표 시나리오 — 회색 과거 5초 · 검정 정답 6초(1초 점) · 청록 후보 경로와 규칙 밴드",
-                 y=0.995, fontsize=12.0)
+    fig.suptitle("대표 시나리오 — 회색 과거 5초 · 검정 정답 6초(1초 점) · 청록 후보 경로와 규칙 밴드\n"
+                 "주황 상자 = AV2 heading (정규화 때문에 항상 오른쪽) · 보라 화살표 = 위치차분 진행방향",
+                 y=0.997, fontsize=10.6)
     fig.tight_layout(rect=(0, 0, 1, 0.975))
     return C.savefig(fig, OUT / "c7_cases.png")
 
@@ -564,14 +573,130 @@ def fig_c8(D, plt):
     return C.savefig(fig, OUT / "c8_tree.png")
 
 
-FIGS = {"c1": fig_c1, "c2": fig_c2, "c3": fig_c3, "c4": fig_c4,
-        "c5": fig_c5, "c6": fig_c6, "c7": fig_c7, "c8": fig_c8}
+# ---------------------------------------------------------------- c9 처리 결정 도식 (요건 11 — 처리 로직용)
+def fig_c9(D, plt):
+    sp = "train" if "train" in D else "val"
+    d = D[sp]
+    n = len(d["sid"])
+    walk = np.isin(d["f_type"], list(R.WALK_TYPES))
+    rn = d["route_none"].astype(bool)
+    cf = d["coverage"] == 0
+    flip = d["f_flip_av2"].astype(bool)
+
+    def box(m, txt, color, tc=None):
+        return {"text": f"{txt}\n{int(m.sum()):,}건 ({100 * m.mean():.2f}%)",
+                "color": color, "tc": tc or C.INK}
+
+    g_walk = walk
+    g_rn = ~walk & rn
+    g_cf = ~walk & ~rn & cf
+    g_ok = ~walk & ~rn & ~cf
+    drop_c, fix_c, keep_c = "#f7d9cd", "#fdeecb", "#d8ecdf"
+    root = {"text": f"{sp} 전체\n{n:,} 시나리오", "color": "#e8eef6",
+            "children": [
+                ("focal 이 보행자·자전거", {**box(g_walk, "차로 출력공간이 성립 안 함\n→ 학습에서 분리", drop_c),
+                                     "children": [
+                                         ("", box(g_walk & rn, "그중 경로 0개", drop_c)),
+                                         ("", box(g_walk & ~rn, "그중 경로 있음\n(보도 위를 걷는다)", drop_c))]}),
+                ("차량 계열", {"text": f"차량·버스·오토바이\n{int((~walk).sum()):,}건 ({100 * (~walk).mean():.2f}%)",
+                           "color": "#e8eef6",
+                           "children": [
+                               ("경로 0개", box(g_rn, "91%는 거리 측정 버그(정점 vs 폴리라인)\n→ 먼저 고치고 남는 것만 버린다", fix_c)),
+                               ("경로 있음 · 정답이 밴드 밖", box(g_cf, "밴드·후보를 보정\n(버리면 회전이 통째로 빠진다)", fix_c)),
+                               ("경로 있음 · 정답이 밴드 안", box(g_ok, "그대로 학습", keep_c))]})]}
+    fig = plt.figure(figsize=(15.4, 9.6))
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.25, 1.0], hspace=0.12)
+    ax = fig.add_subplot(gs[0])
+    C.draw_tree(ax, root, fontsize=8.6, edge_fs=7.8, y_gap=1.0)
+    ax.set_title(f"[{sp}] 정제 처리 도식 — 갈래별 건수 (상호배타)", fontsize=11)
+
+    ax2 = fig.add_subplot(gs[1])
+    DC = R.drop_cost(D)
+    keys = list(DC[sp])
+    vals = {s_: [DC[s_][k]["pct"] for k in keys] for s_ in D}
+    ns = {s_: [DC[s_][k]["n"] for k in keys] for s_ in D}
+    bar_pairs(ax2, keys, vals, ns, list(D), fs=7.0)
+    ax2.set_xlabel("버리면 빠지는 시나리오 비율 [%]")
+    ax2.set_title("기준별 '버리면 얼마나 잃나'  (n = 빠지는 시나리오 수)")
+    ax2.legend(loc="lower right")
+    fig.suptitle("무엇을 버리고 무엇을 고칠 것인가", y=0.995, fontsize=12.5)
+    fig.subplots_adjust(left=0.235, right=0.97, top=0.94, bottom=0.07)
+    return C.savefig(fig, OUT / "c9_decision.png")
+
+
+# ---------------------------------------------------------------- c10 버리면 무엇을 잃나 (정확도)
+def fig_c10(D, plt):
+    sc = R.score_join(D)
+    if sc is None:
+        print("  (점수 parquet 이 없어 c10 을 건너뛴다)")
+        return None
+    fig, axes = plt.subplots(1, 3, figsize=(16.2, 6.4),
+                             gridspec_kw={"width_ratios": [1.15, 1.0, 1.0]})
+    base = sc["전체 minADE6"]
+
+    ax = axes[0]
+    keys = [k for k in sc["집단"] if k != "전체"]
+    v = [sc["집단"][k]["minADE6"] for k in keys]
+    n = [sc["집단"][k]["n"] for k in keys]
+    y = np.arange(len(keys))
+    col = [C.C_RED if x > base else C.C_GREEN for x in v]
+    ax.barh(y, v, color=col, height=0.62, zorder=3)
+    ax.axvline(base, color=C.INK2, lw=1.2, ls="--", label=f"val 전체 {base:.3f} m")
+    ax.legend(loc="lower right", fontsize=8.0)
+    for j, (vv, nn) in enumerate(zip(v, n)):
+        ax.text(vv + 0.08, y[j], f"{vv:.3f}  (n={nn:,})", va="center", fontsize=7.4, color=C.INK2)
+    ax.set_yticks(y); ax.set_yticklabels(keys, fontsize=8.2); ax.invert_yaxis()
+    ax.set_xlim(0, max(v) * 1.35)
+    ax.set_xlabel("minADE6 [m]")
+    ax.set_title(f"(a) 집단별 정확도  ({sc['태그'][:26]}…)")
+    ax.grid(axis="y", visible=False)
+
+    ax = axes[1]
+    ch = [sc["빼면"][k]["변화"] for k in keys]
+    ax.barh(y, ch, color=[C.C_GREEN if x < 0 else C.C_RED for x in ch], height=0.62, zorder=3)
+    ax.axvline(0, color=C.AXIS, lw=1.0)
+    for j, (cc, k) in enumerate(zip(ch, keys)):
+        ax.text(cc + (0.002 if cc >= 0 else -0.002), y[j],
+                f"{cc:+.4f} → {sc['빼면'][k]['남는 minADE6']:.4f}", va="center",
+                ha="left" if cc >= 0 else "right", fontsize=7.4, color=C.INK2)
+    ax.set_yticks(y); ax.set_yticklabels([]); ax.invert_yaxis()
+    ax.set_xlim(min(ch) * 1.9 - 0.01, max(ch) * 1.9 + 0.01)
+    ax.set_xlabel("그 집단을 빼면 전체 minADE6 가 얼마나 변하나 [m]")
+    ax.set_title("(b) 초록 = 빼면 평균이 좋아진다")
+    ax.grid(axis="y", visible=False)
+
+    ax = axes[2]
+    ck = list(sc["커버리지 실패 원인별"])
+    cv = [sc["커버리지 실패 원인별"][k]["minADE6"] for k in ck]
+    cn = [sc["커버리지 실패 원인별"][k]["n"] for k in ck]
+    y2 = np.arange(len(ck))
+    ax.barh(y2, cv, color=C.C_ORANGE, height=0.6, zorder=3)
+    ax.axvline(base, color=C.INK2, lw=1.2, ls="--")
+    for j, (vv, nn) in enumerate(zip(cv, cn)):
+        ax.text(vv + 0.08, y2[j], f"{vv:.2f}  (n={nn:,})", va="center", fontsize=7.4, color=C.INK2)
+    ax.set_yticks(y2); ax.set_yticklabels(ck, fontsize=8.2); ax.invert_yaxis()
+    ax.set_xlim(0, max(cv) * 1.35)
+    ax.set_xlabel("minADE6 [m]")
+    ax.set_title("(c) 커버리지 실패 원인별 정확도")
+    ax.grid(axis="y", visible=False)
+    fig.suptitle("버리면 무엇을 잃나 — 이미 학습된 판의 val 24,988 시나리오별 점수와 붙여 본다",
+                 y=0.98, fontsize=12.0)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    return C.savefig(fig, OUT / "c10_score.png")
+
+
+FIGS = {"c1": fig_c1, "c2": fig_c2, "c3": fig_c3, "c4": fig_c4, "c5": fig_c5,
+        "c6": fig_c6, "c7": fig_c7, "c8": fig_c8, "c9": fig_c9, "c10": fig_c10}
+
+
+DOCS_FIG = REPO / "docs/figures/v4/cleanse"     # .gitignore 가 viz/**.png 는 무시하고 docs/figures 만 남긴다
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--ramp-n", type=int, default=3000)
+    ap.add_argument("--no-copy", action="store_true", help="docs/figures 로 복사하지 않는다")
     a = ap.parse_args()
     plt = C.setup_mpl()
     D = load_all()
@@ -580,6 +705,10 @@ def main():
         if a.only and k not in a.only:
             continue
         p = fn(D, plt, a.ramp_n) if k == "c5" else fn(D, plt)
+        if p is not None and not a.no_copy:
+            import shutil
+            DOCS_FIG.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, DOCS_FIG / Path(p).name)
         print("wrote", p)
 
 

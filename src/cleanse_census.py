@@ -538,6 +538,10 @@ def check_loader(a):
         ok &= bool(np.array_equal(mine["pos"][k], P) and np.array_equal(mine["hav2"][k], H)
                    and np.array_equal(mine["vel"][k], V))
         ok &= len(tracks) == len(s.tracks)
+        ok &= mine["type"] == str(getattr(f, "object_type", "?")).split(".")[-1].lower()
+        mt = sorted(t["type"] for t in tracks)
+        ok &= mt == sorted(str(getattr(t, "object_type", "?")).split(".")[-1].lower()
+                           for t in s.tracks)
         bad += (not ok)
         if not ok:
             print("불일치", d.name)
