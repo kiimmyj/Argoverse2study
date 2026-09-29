@@ -147,7 +147,7 @@ def dataset_kwargs(args):
                 h_src=args.h_src,
                 routes=args.level != "l2",
                 fallback=args.fallback,
-                input_repr=args.input)
+                input_repr=args.input, cleanse=getattr(args, "cleanse", 0))
 
 
 def cache_key(split, dkw):
@@ -426,6 +426,8 @@ def main():
     # 아래 세 인자는 train_v4.py 의 같은 이름 인자와 기본값이 같아야 같은 데이터·모델이 된다.
     # --fallback · --input 은 캐시 키에 들어가므로 값마다 다른 캐시가 생긴다. --th0 는 모델 검증에만 쓴다.
     p.add_argument("--fallback", default="straight1", choices=("straight1", "straight6", "fan"))
+    p.add_argument("--cleanse", type=int, default=0,
+                   help="1 이면 전처리 결함 세 가지를 고친다 (train_v4 --cleanse 와 같아야 캐시를 찾는다)")
     p.add_argument("--input", default="raw5", choices=tuple(X_LEN))
     p.add_argument("--th0", default="current", choices=("current", "guard"))
     p.add_argument("--batch", type=int, default=32)

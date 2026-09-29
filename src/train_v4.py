@@ -185,6 +185,8 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
+    ap.add_argument("--cleanse", type=int, default=0,
+                    help="1 이면 전처리 결함 세 가지를 고친다 — 차로 거리(점-선분), 뒤집힌 focal heading, 뒤집힘 판정 게이트")
     ap.add_argument("--agents", type=int, default=0,
                     help="1 이면 주변 차량(가까운 32대 과거 궤적)을 입력에 붙인다")
     ap.add_argument("--agents-radius", dest="agents_radius", type=float, default=30.0,
@@ -221,7 +223,7 @@ def main():
 
     lim = None if args.limit == 0 else args.limit
     dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src,
-               routes=args.level != "l2", fallback=args.fallback, input_repr=args.input)
+               routes=args.level != "l2", fallback=args.fallback, input_repr=args.input, cleanse=args.cleanse)
     if args.cache:
         # prepare_v4.py 와 같은 규칙(전처리 설정 + 소스 해시)으로 캐시를 찾는다. 소스를 고쳤으면 키가
         # 달라져 못 찾으므로, 낡은 캐시로 학습하는 일은 구조적으로 막힌다.

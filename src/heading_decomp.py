@@ -114,7 +114,7 @@ def align_ref(h_ref, h, obs=None):
 
 
 def build_heading(pos, obs=None, h_ref=None, dt=DT, v_min=V_MIN, jump_deg=JUMP_DEG,
-                  fallback="av2"):
+                  fallback="av2", gate_flip=False):
     """위치차분으로 h 를 만든다. 저속 구간은 h_ref(AV2 heading)로 메운다.
 
     pos (T,2), obs (T,) 관측 여부. 주변 차량은 중간이 끊기므로 관측된 이웃끼리 차분한다.
@@ -139,7 +139,13 @@ def build_heading(pos, obs=None, h_ref=None, dt=DT, v_min=V_MIN, jump_deg=JUMP_D
         # 정지 구간의 큰 방향 변화도 실제 변위 방향이다. 여기에 가드를 걸면 그 값을 얼려서
         # '위치차분이라 복원이 무손실'이라는 이득이 통째로 사라진다 (실측 0.00 → 2.34 m).
         h_ref = guard(h_ref, jump_deg)
-        h_ref, _ = align_ref(h_ref, h, obs)
+        if gate_flip:      # 실제로 움직인 구간에서만 180° 판정 (2026-09-30 전수 조사: 지금 판정의 92.9% 가 차로 반대를 만든다)
+            seg = np.full(len(pos), 0.0)
+            dd = np.linalg.norm(np.diff(np.asarray(pos, float), axis=0), axis=1) / dt
+            seg[:-1] = dd
+            h_ref, _, _ = align_ref_gated(h_ref, h, obs, seg, pos=pos)
+        else:
+            h_ref, _ = align_ref(h_ref, h, obs)
         fill = obs & ~np.isfinite(h) & np.isfinite(h_ref)
         h[fill], src[fill] = h_ref[fill], 2
 
@@ -159,7 +165,7 @@ def build_heading(pos, obs=None, h_ref=None, dt=DT, v_min=V_MIN, jump_deg=JUMP_D
     return h, src
 
 
-def ah_features(pos_obs, head_obs, yaw0, dt=DT, v_min=V_MIN):
+def ah_features(pos_obs, head_obs, yaw0, dt=DT, v_min=V_MIN, gate_flip=False):
     """v4 입력 2채널 (a, h) 를 **관측 구간만으로** 만든다.
 
       a   속도 증분 [km/h] / 3   — motion_repr 의 ah0 방식. 누적합하면 속도가 되고 첫 값이 v0 다.
@@ -189,7 +195,7 @@ def ah_features(pos_obs, head_obs, yaw0, dt=DT, v_min=V_MIN):
     m = mr.traj_to_motion(pos_obs, dt=dt, stop_ms=1.0, smooth=1)
     a_ch = m.dv_kph / mr.DEFAULT_SCALES["dv_kph"]
     h_city, _ = build_heading(pos_obs, h_ref=np.asarray(head_obs, dtype=np.float64),
-                              dt=dt, v_min=v_min)
+                              dt=dt, v_min=v_min, gate_flip=gate_flip)
     h_n = wrap(h_city - float(yaw0))
     return np.stack([a_ch, h_n], axis=1).astype(np.float32), float(h_n[-1])
 

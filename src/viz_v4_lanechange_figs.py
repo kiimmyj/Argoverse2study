@@ -284,8 +284,18 @@ def fig_smoothing(B, plt):
     R = pd.DataFrame(rows)
     order = ["ah2", "ah3s", "ah3", "ah2_2hz", "ah3_2hz"]
     order = [o for o in order if (R["inp"] == o).any()]
+    # 시작 시점 부분집합도 시드별로 (평활이 '이미 시작한' 차선변경만 살릴 수도 있으니 따로 본다)
+    sub_rows = []
+    for t in B.tags:
+        for nm, m in (("관측중 시작", B.S1), ("중간", B.SM), ("예측중 새로", B.S2)):
+            q = B.sel(t, m)
+            sub_rows.append(dict(tag=t, inp=B.verify[t]["input"], grp=nm,
+                                 hit1=100 * q["hit1"].mean(), minade=q["minade"].mean()))
+    SR = pd.DataFrame(sub_rows)
+    SR.to_json(L.DATA / "tag_table_by_start.json", orient="records", force_ascii=False, indent=1)
     th0 = theta0_quality(B)
-    fig, axes = plt.subplots(1, 4, figsize=(15.2, 4.1))
+    fig, axes2 = plt.subplots(2, 4, figsize=(15.2, 7.6))
+    axes = axes2[0]
     panels = [("ade_all", "전체 minADE6 [m]", False), ("ade_lc", "차선변경 minADE6 [m]", False),
               ("hit1", "차선변경 1위 적중률 [%]", True),
               ("ach", "1위 모드 횡이동 달성률 (중앙)", True)]
@@ -302,7 +312,28 @@ def fig_smoothing(B, plt):
         ax.set_ylabel(lab)
         rng = R.loc[R["inp"] == "ah2", key]
         ax.set_title(f"{lab}  ·  기준판 시드 범위 {rng.max()-rng.min():.3g}", fontsize=9.4)
-    ax = axes[0]
+    for ax, (gname, gmask) in zip(axes2[1], (("관측중 시작", B.S1), ("중간", B.SM), ("예측중 새로", B.S2))):
+        for i, inp in enumerate(order):
+            v = SR.loc[(SR["inp"] == inp) & (SR["grp"] == gname), "hit1"].to_numpy()
+            col = INPUT_COLOR[inp]
+            ax.plot([i, i], [v.min(), v.max()], color=col, lw=6, alpha=0.28, solid_capstyle="round")
+            ax.scatter(np.full(len(v), i), v, s=42, color=col, edgecolors=C.SURF, linewidths=0.8, zorder=3)
+            ax.text(i, v.max(), f"평균 {v.mean():.1f}", fontsize=6.8, color=C.INK2, va="bottom", ha="center")
+        ax.set_xticks(range(len(order)))
+        ax.set_xticklabels([INPUT_LABEL[o].replace(" ", "\n", 1) for o in order], fontsize=6.6, linespacing=1.45)
+        ax.set_ylabel("1위 적중률 [%]"); ax.set_ylim(0, 33)
+        ax.set_title(f"{gname} (n={int(gmask.sum())})", fontsize=9.4)
+    ax = axes2[1, 3]
+    ax.axis("off")
+    ax.text(0.02, 0.92, "읽는 법", fontsize=9.5, color=C.INK, va="top", weight="bold")
+    ax.text(0.02, 0.78,
+            "· 점 = 시드 하나, 막대 = 그 입력의 시드 범위\n"
+            "· 두 입력의 막대가 겹치면 '가릴 수 없음'\n"
+            "· 10 Hz 기준판 시드 범위: 전체 minADE6 0.105 m,\n"
+            "  차선변경 minADE6 0.143 m, 적중률 5.6 pp\n"
+            "· 겹치지 않는 유일한 칸은 2 Hz 적중률인데\n"
+            "  평활 쪽이 나쁘다 (전체 13.7 → 11.2,\n"
+            "  관측중 시작 24.8 → 20.0)", fontsize=8.0, color=C.INK2, va="top", linespacing=1.6)
     fig.suptitle("가설 (1) 전처리 평활 — 점 하나가 시드 하나, 막대는 시드 범위. "
                  "평활이 차선변경을 좋게 만든 칸은 없다 (2 Hz 적중률은 오히려 시드 범위 밖으로 나빠진다)",
                  fontsize=11.5, y=0.995)
@@ -517,7 +548,8 @@ def fig_series(B, plt):
         ax.set_xlabel("시간 [s] (0 = 예측 시작)"); ax.set_ylabel("횡오프셋 d − d(0) [m]")
         if col == 0:
             ax.legend(fontsize=7.0, loc="upper left")
-    fig.suptitle("모델은 시작 잔차각을 받아 놓고 1초 안에 0 으로 되돌린다 — 선은 중앙값, 띠는 사분위",
+    fig.suptitle("모델은 시작 잔차각을 제대로 받아 놓고 정답보다 3배 빨리 0 으로 되돌린다 "
+                 "(관측중 시작: 1초 뒤 정답 7.1° vs 모델 2.0°) — 선은 중앙값, 띠는 사분위",
                  fontsize=11.5, y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.955))
     return C.savefig(fig, L.OUT / "f7_theta_d.png")

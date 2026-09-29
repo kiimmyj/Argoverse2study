@@ -55,6 +55,26 @@ AH3_CFG = {                       # 이름 -> (다운샘플 간격, 가우시안
 }
 
 
+def _fix_flipped_yaw(pos_obs, head_obs, theta, min_move_m=5.0, v_min=2.0):
+    """AV2 차체 heading 이 이동방향과 180° 뒤집힌 시나리오의 정규화 각도를 바로잡는다.
+
+    전수 조사(2026-09-30): val 18건 / train 209건(0.10%) 뿐인데, 그 18건의 minADE6 이 15.07 m 다
+    (전체 1.49). 정규화 프레임과 후보 차로 방향 필터가 둘 다 이 각도를 쓰기 때문에 장면이 통째로
+    반대쪽이 된다. 실제로 움직인 구간에서만 판정한다 — 정지 차량은 이동방향 자체가 잡음이다.
+    """
+    p = np.asarray(pos_obs, dtype=np.float64)
+    d = np.diff(p, axis=0)
+    sp = np.linalg.norm(d, axis=1) / 0.1
+    m = sp >= v_min
+    if m.sum() < 3 or float(np.linalg.norm(d, axis=1).sum()) < min_move_m:
+        return theta
+    course = np.arctan2(d[m, 1], d[m, 0])
+    diff = np.abs(wrap(np.asarray(head_obs, dtype=np.float64)[:-1][m] - course))
+    if float(np.median(diff)) > np.pi / 2:
+        return float(wrap(theta + np.pi))
+    return theta
+
+
 def _at(route, s_query):
     """경로 위 호길이 s 지점의 좌표 (경로보다 멀면 끝점)."""
     S = route["s"]
@@ -69,7 +89,7 @@ class Av2LaneRuleDataset(Dataset):
                  centerline: str = "api", select: str = "centroid",
                  theta_ch: bool = False, h_src: str = "av2",
                  routes: bool = False, n_modes: int = N_MODES,
-                 fallback: str = "straight1", input_repr: str = "raw5"):
+                 fallback: str = "straight1", input_repr: str = "raw5", cleanse: int = 0):
         """centerline / select 기본값은 dataset_map.py 와 숫자까지 일치하도록 맞춰져 있다.
         (select="nearest" 는 차선까지의 최단거리로 고르는 개선안이지만 기존 실험과 달라진다)
 
@@ -110,6 +130,12 @@ class Av2LaneRuleDataset(Dataset):
         if theta_ch and input_repr != "raw5":
             raise ValueError("theta_ch 는 raw5 입력에만 덧붙인다 — ah2 계열은 이미 h 를 담는다")
         self.input_repr = input_repr
+        # cleanse=1 (2026-09-30 전수 조사 뒤): 전처리 결함 세 가지를 함께 고친다.
+        #   ① 차로 후보 거리를 정점 → 점-선분 거리로 (차량 '경로 0개' 의 91% 가 사실 차로 위였다)
+        #   ② focal AV2 heading 이 이동방향과 180° 뒤집힌 시나리오의 정규화 각도를 바로잡는다
+        #      (val 18건이지만 그 18건의 minADE6 이 15.07 m 다 — 프레임과 후보 경로가 통째로 반대쪽)
+        #   ③ 180° 뒤집힘 판정을 실제로 움직인 구간으로 제한한다 (align_ref → align_ref_gated)
+        self.cleanse = int(cleanse)
         self.centerline, self.select = centerline, select
         self.dirs = []
         for d in sorted(self.root.iterdir()):
@@ -136,6 +162,8 @@ class Av2LaneRuleDataset(Dataset):
 
         origin = pos[OBS_LEN - 1].copy()
         theta = head[OBS_LEN - 1].copy()
+        if self.cleanse:
+            theta = _fix_flipped_yaw(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
         R = _rotation_matrix(-theta)
         pos_n = (pos - origin) @ R.T
         x = np.concatenate([pos_n, vel @ R.T, (head - theta).reshape(-1, 1)], axis=1)[:OBS_LEN]
@@ -145,7 +173,8 @@ class Av2LaneRuleDataset(Dataset):
         # out["h0"] 가 (2,) 로 나간다 (train 스모크에서 잡힘).
         h_last = 0.0
         if self.input_repr != "raw5" or self.routes:
-            feat_ah, h_last = ah_features(pos[:OBS_LEN], head[:OBS_LEN], float(theta))
+            feat_ah, h_last = ah_features(pos[:OBS_LEN], head[:OBS_LEN], float(theta),
+                                          gate_flip=bool(self.cleanse))
             if self.input_repr == "ah2":
                 x = feat_ah
             elif self.input_repr == "ah2_2hz":
@@ -229,7 +258,8 @@ class Av2LaneRuleDataset(Dataset):
         speed = float(np.linalg.norm(vel[OBS_LEN - 1]))
         budget = max(20.0, speed * PRED_SEC) + REACH_MARGIN_M
         path_city = pos_n[:OBS_LEN].astype(np.float64) @ R + origin
-        starts = g.candidate_lanes(origin.astype(np.float64), h0, path=path_city)
+        starts = g.candidate_lanes(origin.astype(np.float64), h0, path=path_city,
+                                   seg_dist=bool(self.cleanse))
         reach = g.reachable(starts, budget) if starts else set()
 
         if self.with_rules:

@@ -261,9 +261,26 @@ class LaneGraph:
                     q.append(nxt)
         return set(best)
 
+    @staticmethod
+    def _seg_dist(pts: np.ndarray, xy: np.ndarray) -> float:
+        """점에서 폴리라인(선분들)까지의 최단거리. 정점 거리와 달리 정점 간격에 안 흔들린다.
+
+        2026-09-30 전수 조사: 차량 '경로 0개' 시나리오의 91.1% 가 같은 방향 차로 **폴리라인까지
+        중앙 0.49 m** 였다. 중심선 정점 간격이 5 m 를 넘는 곳이 있어 선 위에 있는 차량도
+        정점 기준으로는 반경(5 m) 밖으로 밀려났다 (대표 4219abf6: 폴리라인 0.32 m / 정점 5.66 m).
+        """
+        if len(pts) < 2:
+            return float(np.min(np.linalg.norm(pts - xy, axis=1)))
+        a, b = pts[:-1], pts[1:]
+        ab = b - a
+        den = (ab * ab).sum(axis=1)
+        t = np.where(den > 1e-12, ((xy - a) * ab).sum(axis=1) / np.maximum(den, 1e-12), 0.0)
+        proj = a + np.clip(t, 0.0, 1.0)[:, None] * ab
+        return float(np.min(np.linalg.norm(proj - xy, axis=1)))
+
     def candidate_lanes(self, xy: np.ndarray, heading_dir: Optional[np.ndarray] = None,
                         radius: float = CAND_RADIUS_M, top_k: int = CAND_TOP_K,
-                        path: Optional[np.ndarray] = None) -> List[int]:
+                        path: Optional[np.ndarray] = None, seg_dist: bool = False) -> List[int]:
         """한 점이 속할 수 있는 차로 후보를 가까운 순으로 돌려준다.
 
         차로 매칭은 원래 애매하다. 특히 교차로에서는 좌/우/직진 차로가 공간적으로 겹쳐서
@@ -276,7 +293,8 @@ class LaneGraph:
         for lid, ln in self.lanes.items():
             if heading_dir is not None and float(ln.direction @ heading_dir) <= SAME_DIR_COS:
                 continue
-            d0 = float(np.min(np.linalg.norm(ln.centerline - xy, axis=1)))
+            d0 = (self._seg_dist(ln.centerline[:, :2], xy) if seg_dist
+                  else float(np.min(np.linalg.norm(ln.centerline - xy, axis=1))))
             if d0 > radius:
                 continue
             if path is None:
