@@ -88,6 +88,30 @@ def jitter_steps(aux):
     return (ua[..., 1:] - ua[..., :-1]) ** 2 + (ut[..., 1:] - ut[..., :-1]) ** 2
 
 
+LANE_W_M = 3.42          # AV2 차로 폭 중앙값 — 횡 목표 오프셋의 크기
+
+
+def lat_target_loss(aux, mode_mask, route_sub, lane_w=LANE_W_M):
+    """같은 경로에 배정된 **둘째·셋째 슬롯**을 옆 차로 쪽으로 밀어 두는 보조 손실 (2026-09-30).
+
+    왜 — 차선변경 분석(docs/v4_lane_change.md): 같은 경로의 하위 모드들이 끝 s 는 11.32 m 퍼지는데
+    끝 d 는 **0.31 m** 밖에 안 퍼진다. 모드 축이 종방향으로만 서 있어서, 차선변경이 표현 가능한
+    밴드(±3.6 m) 안에 있어도 모델이 옆으로 가는 모드를 아예 만들지 않는다(1위 적중 12.4%).
+    sub 임베딩은 이미 있지만 '무엇을 뜻하는지'를 아무도 알려 주지 않는다 — 여기서 알려 준다.
+
+    sub=0 은 건드리지 않는다(정답이 차로 유지인 경우가 대부분이라 그쪽을 흔들면 손해다).
+    sub>=1 은 ±lane_w 로 번갈아 목표를 준다. 힌지가 아니라 제곱이지만 가중치를 작게 준다.
+    """
+    d_end = aux["d"][..., -1]                                  # (B,K) 끝 횡오프셋
+    # 방향은 **슬롯 번호**로 번갈아 준다. sub 로 나누면 구별 경로가 3개일 때 sub 가 0·1 뿐이라
+    # 둘째 묶음 전체가 같은 쪽(왼쪽)만 겨냥하게 된다.
+    slot = torch.arange(d_end.size(1), device=d_end.device).view(1, -1).expand_as(d_end)
+    sgn = torch.where(slot % 2 == 0, 1.0, -1.0)
+    tgt = torch.where(route_sub >= 1, sgn * lane_w, torch.zeros_like(sgn))
+    m = mode_mask * (route_sub >= 1).float()
+    return (((d_end - tgt) / lane_w) ** 2 * m).sum() / m.sum().clamp(min=1)
+
+
 def jitter_xy(traj, mode_mask, thresh_deg=LABEL_DTHETA_DEG, v_min=1.0, dt=0.1):
     """**예측 좌표**에서 복원한 진행방향의 스텝 변화가 라벨 상한을 넘는 만큼만 벌한다 (2026-09-30).
 
@@ -185,6 +209,8 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
+    ap.add_argument("--lat-modes", dest="lat_modes", type=float, default=0.0,
+                    help="횡 모드 축 보조 손실 가중치 — 같은 경로의 둘째·셋째 슬롯을 ±차로폭으로 민다")
     ap.add_argument("--cleanse", type=int, default=0,
                     help="1 이면 전처리 결함 세 가지를 고친다 — 차로 거리(점-선분), 뒤집힌 focal heading, 뒤집힘 판정 게이트")
     ap.add_argument("--agents", type=int, default=0,
@@ -289,6 +315,8 @@ def main():
                 sm = jitter(aux, mm)
                 loss = loss + args.smooth * sm
                 rsm += float(sm.detach()) * y.size(0)
+            if args.lat_modes > 0 and aux:
+                loss = loss + args.lat_modes * lat_target_loss(aux, mm, b["route_sub"].to(device))
             if args.smooth_mode in ("xy", "both") and args.smooth_xy > 0:
                 # 좌표 기준 힌지 — 지금 벌점이 누르는 dθ 는 실제 궤적 방향 변화의 0.3% 만 설명한다(2026-09-29 측정)
                 loss = loss + args.smooth_xy * jitter_xy(traj, mm)

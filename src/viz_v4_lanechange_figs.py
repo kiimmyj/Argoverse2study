@@ -451,6 +451,7 @@ def fig_band(B, plt):
     ax.text(1.0, 0.02, " 밴드 상한", fontsize=7.2, color=C.INK, va="bottom",
             transform=ax.get_xaxis_transform())
     ax.set_xlabel("1위 모드 max|d| / 밴드"); ax.set_ylabel("밀도")
+    ax.set_ylim(0, ax.get_ylim()[1] * 1.45)
     ax.legend(fontsize=6.4, loc="upper left")
     ax.set_title("밴드에 붙어 있나 — 맞힌 경우가 오히려 밴드에 가깝다", fontsize=9.6)
 
@@ -928,4 +929,26 @@ def summary(B):
     out["모드다양성"] = {"n": len(sp), "Δd퍼짐_중앙_m": round(float(np.median(sp)), 2),
                     "s퍼짐_중앙_m": round(float(np.median(ss)), 2)}
     (L.DATA / "summary.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
+
+    # 사용자 요청: 시나리오 ID 를 유형별로 묶어 남긴다
+    sid = B.df["sid"].to_numpy()
+    ids = {"기준판": BASE, "적중기준_e_lat_m": HIT_M,
+           "설명": {"A": "어떤 후보 경로도 정답을 ±3.6 m 안에 못 담는다",
+                  "C": "1위 모드가 맞혔다 (횡 끝점오차 ≤ 1 m)",
+                  "B": "다른 모드는 맞혔는데 확률 1위가 아니다",
+                  "D": "6모드 전부 못 맞혔다",
+                  "시작시점": "관측 마지막 2초의 진행방향 기반 횡이동으로 가른다"}}
+    for k, v in grp.items():
+        ids[f"실패_{k}"] = {"n": int(v.sum()), "sids": [sid[j] for j in s["idx"][v]]}
+    for k, m in (("시작_관측중", B.S1), ("시작_중간", B.SM), ("시작_예측중새로", B.S2),
+                 ("정의_D1", B.D1), ("정의_D2", B.D2), ("U턴", B.UT)):
+        ids[k] = {"n": int(m.sum()), "sids": [x for x in sid[m]]}
+    # 실패 갈래 × 시작 시점 교차
+    for gk, gv in grp.items():
+        for sk, sm in (("관측중", B.S1), ("중간", B.SM), ("예측중새로", B.S2)):
+            mm = np.zeros(B.N, bool)
+            mm[s["idx"][gv]] = True
+            mm &= sm
+            ids[f"교차_{gk[0]}_{sk}"] = {"n": int(mm.sum()), "sids": [x for x in sid[mm]]}
+    (L.DATA / "id_groups.json").write_text(json.dumps(ids, indent=1, ensure_ascii=False))
     print(json.dumps(out, indent=1, ensure_ascii=False))
