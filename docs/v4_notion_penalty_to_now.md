@@ -1,210 +1,263 @@
-# v4 진행 보고 — 벌점부터 지금까지
+# v4 Progress Report — Previous Action Item 대응
 
-> 기간 2026-09-16 ~ 09-30 · 데이터 Argoverse 2 (train 199,908 / val 24,988) · 기준 모델 L4 · 30에폭 코사인
+> 기간 2026-09-16 ~ 09-30 · dataset Argoverse 2 (train 199,908 / val 24,988)
+> baseline: L4 · jitter penalty 1.0 · 30 epoch cosine LR · seed 0~2
+> 모든 비교는 **paired-seed**(같은 seed끼리 짝지어 차이를 봄) 기준임
 
 ---
 
-## 1. 벌점
+## 1. Penalty — 꼭 필요한가, 필요하다면 어떻게
 
-### 1.1 도입 배경
+### 1.1 결론
 
-1. 전체 데이터 학습에서 액션이 매 스텝 부호를 뒤집으며 진동했음
-2. 스텝당 방향 변화가 라벨 상한(7.3°)을 넘는 비율이 L0 35% · L4 20%였음
-3. 위치 손실로는 못 잡았음 — 방향을 ±8°로 번갈아 내도 위치는 수 cm만 흔들리기 때문임
-4. 이웃 스텝 액션 차이의 제곱합을 손실에 추가했음 (가중치 1.0)
+1. **필요함.** 단 accuracy cost가 있음 — minADE6 +0.058 m (약 4%) 증가, 대신 kinematic violation rate가 17배 감소함
+2. **현재 형태는 부적절함.** penalty가 누르는 변수가 실제 trajectory의 heading 변화를 0.3%만 설명함
+3. **개선안을 구현했음** — penalty target을 model output에서 **predicted coordinate**로 교체, 3 seeds 학습 중임
 
-### 1.2 필요성 검증 (같은 시드 짝비교)
+### 1.2 필요성 검증 — paired-seed A/B
 
-| 조건 | minADE6 (최근 5에폭) | 7.3° 초과 | 흔들림 | 밴드 이탈 |
+| condition | minADE6 (last 5 epochs) | violation rate (>7.3°/step) | jitter | off-band |
 | --- | --- | --- | --- | --- |
-| 벌점 없음 (시드 0 / 1) | **1.342 / 1.363** | 17.45% / 19.39% | 1.78 / 1.90 | 0.47 / 0.49 |
-| 벌점 1.0 (시드 0 / 1) | 1.407 / 1.415 | **1.05% / 1.14%** | **0.003** | 0.53 / 0.52 |
-| 짝 차이 | **−0.058 m** | 17배 개선 | 600배 개선 | 거의 같음 |
+| no penalty (seed 0 / 1) | **1.342 / 1.363** | 17.45% / 19.39% | 1.78 / 1.90 | 0.47 / 0.49 |
+| penalty 1.0 (seed 0 / 1) | 1.407 / 1.415 | **1.05% / 1.14%** | **0.003** | 0.53 / 0.52 |
+| paired difference | **+0.058 m** | −17배 | −600배 | 차이 없음 |
 
-1. 정확도 4%를 주고 진동 17배를 사는 거래임
-2. 두 시드에서 부호가 같아 이제 확실히 측정됨
-3. 기존에 적었던 대가(0.106 m)를 **0.058 m로 정정했음**
-4. 정확도만 보면 끄는 쪽이 유리하나, 예측의 20%가 사람이 못 내는 요레이트를 갖게 됨
+1. 두 seed에서 부호가 일치해 effect가 확인됨
+2. 기존에 보고한 accuracy cost(0.106 m)를 **0.058 m로 정정했음** — 기존 값은 seed variance와 섞여 있었음
+3. penalty를 제거하면 predicted trajectory의 약 20%가 실제 차량이 낼 수 없는 yaw rate를 가짐
 
-### 1.3 지표 결함 — 자기참조
+### 1.3 metric 결함 — self-referential measurement
 
-| 조건 | 모델 출력 기준 | 예측 좌표 복원 기준 |
+| condition | model output 기준 | predicted coordinate 복원 기준 |
 | --- | --- | --- |
-| 벌점 1.0 · 30에폭 | 0.005% | **0.735%** |
-| 벌점 0.1 | 0.001% | **1.324%** (1,191배) |
-| 정답 라벨 | — | 0.351% |
+| penalty 1.0 · 30 epoch | 0.005% | **0.735%** |
+| penalty 0.1 | 0.001% | **1.324%** (1,191배 차이) |
+| ground truth label | — | 0.351% |
 
-1. "7.3° 초과"를 모델이 낸 각도에서 재고 있었음 — 벌점이 누르는 바로 그 값임
-2. 항별로 지워 기여도를 분리했음
+1. violation rate를 **model이 출력한 각도**에서 측정하고 있었음 — penalty가 직접 최소화하는 변수임
+2. term별 제거 실험으로 기여도를 분리했음
 
-| 제거 항 | 위반율 (원래 0.735%) |
+| removed term | violation rate (baseline 0.735%) |
 | --- | --- |
-| 적분기 기하 보정 | **0.186%** (−75%) |
-| 경로 곡률 | 0.423% (−42%) |
-| **모델이 낸 각도 변화** | **0.733% (−0.3%)** |
+| integrator geometry correction | **0.186%** (−75%) |
+| route curvature | 0.423% (−42%) |
+| **model output (Δθ)** | **0.733% (−0.3%)** |
 
-3. 모델 출력을 통째로 지워도 위반율이 0.3%만 움직였음
-4. 모델 내부 `h = 도로각 + 잔차각`이 실제 궤적의 진행방향이 아니었음
+3. model output을 전부 제거해도 violation rate가 0.3%만 변함
+4. 원인 — internal heading `h = k(s) + θ`가 model이 실제로 생성하는 trajectory의 heading과 다름
 
 ![](figures/v4/feasibility/m1_2_self_vs_xy.png)
 
-### 1.4 문헌 조사
+### 1.4 Literature review
 
-1. 구조로 해결한 사례 3편(운동학 적분기·제어 출력)은 매끄러움 손실 항이 없었음
-2. "매끄러운 구조 ≠ 좋은 방향"이 반복 확인됐음 — 베지어를 써도 각도 오차는 따로 사야 했음(SIMPL)
-3. 같은 함정을 지적한 논문이 셋 있었음 — MultiPath++는 모델 출력 기준 0.00% ↔ 좌표 기준 1.22%였음
-4. 매끄러움 평가 표준은 전부 좌표에서 나옴 (WOSAC 각속도 분포·곡률·회전반경)
-5. 결론 — 현재 형태는 근거가 약함. 대상을 좌표 기준으로 바꾸는 것이 문헌과 측정이 함께 가리키는 방향임
+1. kinematic integrator/control output으로 violation을 0%로 만든 사례 3편은 **smoothness loss term이 없음** (DKM, PTNet, TPK)
+2. 단 "smooth output ≠ accurate heading"이 반복 보고됨 — Bézier basis를 써도 heading error는 별도 loss로 처리해야 했음 (SIMPL: minFYE6 0.297 → 0.076)
+3. 동일한 self-reference 문제를 지적한 논문 3편 확인 — MultiPath++ (model output 기준 0.00% ↔ coordinate 기준 1.22%), Greer YawLoss, Grad-CAPS
+4. smoothness evaluation의 사실상 표준은 모두 **coordinate 기반**임 (WOSAC angular velocity distribution, curvature, turning radius)
+5. seed variance를 다룬 STEP(2025)은 "작은 성능 차이는 training noise로 설명되는 경우가 많다"고 보고함 — 본 프로젝트 관측과 일치함
 
-### 1.5 개선안
+### 1.5 개선안 — coordinate-based penalty
 
-1. 예측 좌표에서 복원한 진행방향의 스텝 변화가 7.3°를 넘는 만큼만 누르는 힌지를 구현했음
-2. 검증 — 직진 0 · 임계 안 회전(7°/step) 0 · 정지 0 · 지그재그(20°/step)만 벌점, 실제 회전은 안 건드림
-3. 3시드 학습 대기 중임
+1. predicted coordinate에서 복원한 heading의 step 변화가 7.3°를 초과하는 분량만 hinge로 penalize함
+2. unit test 통과 — straight 0, 임계 내 turn(7°/step) 0, stationary 0, zigzag(20°/step)만 penalty 발생함
+3. 3 seeds 학습 대기 중임
 
 ---
 
-## 2. 전처리 평활
+## 2. Preprocessing = smoothing + downsampling
 
-### 2.1 기존 방식 무효 확인
+### 2.1 결론
 
-1. 2 Hz 입력 직진 방향 흔들림이 평활 없음 3.23 °/s, 기존 평활 3.23 °/s로 동일했음
-2. 차단 주파수가 2.38 Hz라 2 Hz 표집에서 걸러야 할 대역을 막지 못했음
+1. **downsampling은 현행 유지함** — 순서(smoothing → sampling)와 RAMP_SKIP=4가 측정상 타당했음
+2. **기존 smoothing은 no-op였음** — filter cutoff가 2.38 Hz라 2 Hz sampling의 anti-aliasing 역할을 전혀 못 했음
+3. **새 smoothing은 input quality를 개선했으나 model accuracy 이득은 검출되지 않았음** → 채택 보류함
 
-### 2.2 데이터 특성
+### 2.2 기존 방식 무효 확인
 
-1. 잡음과 신호가 갈리는 지점이 0.6~1.0 Hz였음 — 정지 차량(순수 잡음)과 이동 차량 스펙트럼이 그 부근에서 만남
-2. AV2 위치는 데이터셋 단계에서 이미 평활돼 있었음 → 우리 것은 2차 평활임
+| metric (2 Hz input, straight scenarios) | no smoothing | 기존 SG(5,2) |
+| --- | --- | --- |
+| heading jitter p90 | 3.23 °/s | **3.23 °/s** |
+| zigzag ratio | 36.7% | 36.6% |
+| velocity-field course angle과의 차 | 1.04° | 1.05° |
+
+### 2.3 Data characterization
+
+1. signal과 noise가 교차하는 frequency는 **0.6~1.0 Hz**였음 — stationary vehicle(pure noise)과 moving vehicle의 position spectrum이 그 부근에서 만남
+2. position noise 구성 — low-frequency drift σ 13.5 cm + white noise σ 0.77 cm + heavy tail(stationary step의 4.02%가 1 m/s 초과)
+3. AV2 position은 dataset 단계에서 이미 smoothing되어 있었음 → 본 작업은 second-pass smoothing에 해당함
 
 ![](figures/v4/smoothing/char_2_spectrum.png)
 
-### 2.3 변경 내용
+### 2.4 변경 내용
 
-| 항목 | 변경 | 근거 |
+| item | 변경 | 근거 |
 | --- | --- | --- |
-| 위치 평활 | 가우시안 σ = 0.25 s (차단 0.53 Hz) | 신호가 이기는 대역만 남김 |
-| 진행방향 | 속력 가중 혼합 (교차 3 m/s) | 기존 "1 m/s 하드 스위치"가 ±150 °/s 계단을 만들었음 |
-| 180° 뒤집힘 판정 | 움직인 구간에서만 | 정지 차량은 위치 잡음이 판정을 정했음 |
+| position smoothing | Gaussian σ = 0.25 s (cutoff 0.53 Hz), 경계는 2nd-order polynomial extrapolation | signal이 우세한 대역만 통과시킴. 1st-order 경계 처리는 window 끝 yaw rate를 0.33배로 감쇠시킴 |
+| heading | speed-weighted circular blend (crossover 3 m/s) | 기존 hard switch(1 m/s)가 step당 ±150 °/s의 discontinuity를 생성했음 |
+| 180° flip correction | 실제 이동 구간에서만 판정 | stationary vehicle은 position noise가 판정을 결정했음 |
+| downsampling | 변경 없음 (smoothing → 5-step sampling) | downsampling만으로 heading jitter p90이 6.04 → 3.23 °/s로 감소함 |
 
-### 2.4 결과
+### 2.5 결과 — before vs after
 
-| 지표 | 기존 | 변경 후 |
+| metric | 기존 | 변경 후 |
 | --- | --- | --- |
-| 직진 방향 흔들림 p90 | 2.70 °/s | **2.22 °/s** |
-| 저크 p90 | 9.75 m/s³ | **7.61 m/s³** |
-| 회전 보존 | 1.022 | **1.022** (감쇠 없음) |
-| 모델 정확도 (3시드 짝비교) | — | **가릴 수 없음** |
+| straight heading jitter p90 | 2.70 °/s | **2.22 °/s** (−18%) |
+| jerk p90 | 9.75 m/s³ | **7.61 m/s³** (−22%) |
+| turn preservation ratio | 1.022 | **1.022** (감쇠 없음) |
+| model accuracy (3 seeds, paired) | — | **−0.053 ± 0.069 m, 부호 불일치 → 검출 불가** |
 
-1. 입력 품질은 올랐으나 모델 점수는 안 움직였음 → **채택 보류했음**
-2. 평활의 값어치는 잡음이 심한 주변 차량 입력에서 확인할 예정임
+1. input quality는 개선됐으나 accuracy 개선은 seed variance와 구분되지 않았음
+2. smoothing의 효과는 noise가 큰 **neighborhood vehicle input**에서 재검증할 예정임
 
 ![](figures/v4/smoothing/panel_straight_1.png)
 
 ---
 
-## 3. 비교 방법
+## 3. Neighborhood vehicles
 
-### 3.1 시드 잡음
+### 3.1 결론
 
-1. 같은 설정을 시드만 바꿔 돌렸더니 1.407 / 1.415 / **1.547**이 나왔음 (범위 0.140)
-2. 지금까지 "효과"라 부르던 차이(0.02~0.11)보다 컸음
-3. 시드 2는 학습 실패가 아니었음 — train loss는 가장 낮았음. 더 잘 맞춘 해가 일반화를 더 못 했음
+1. 요청대로 **radius 30 m** 단순 방식으로 구현 완료했음
+2. seed 0 결과는 +0.026 m(소폭 악화) — 3 seeds를 채워 판정 예정임
 
-### 3.2 짝비교 도입
+### 3.2 구현
 
-| 비교 | 짝 차이 | 시드별 부호 | 판정 |
+1. input — radius 30 m 내 vehicle의 past 5 s를 0.5 s 간격으로, channel 5개(relative position 2, sin/cos heading, observation mask)
+2. encoder — vehicle별 MLP embedding 후 focal trajectory feature를 query로 attention pooling함
+3. parameter 450,681 → 556,153
+4. 기존 neighbor cache를 재사용했음(가까운 32대·past 5 s·focal frame·미래 미사용), past position 포함본을 추가로 생성했음
+
+### 3.3 평가 계획
+
+1. 전체 minADE6로는 효과가 보이지 않을 가능성이 큼 — lane change 분석에서 "prediction window 내 신규 시작 309건"을 별도 평가군으로 지정했음
+
+---
+
+## 4. U-turn / Lane change
+
+### 4.1 결론
+
+1. **U-turn은 제외함** — val 73건(0.29%)으로 희소함
+2. **lane change는 제시된 두 가설 모두 기각됨**
+
+| hypothesis | 판정 | 근거 |
+| --- | --- | --- |
+| (1) smoothing으로 해결됨 | 기각 | input heading error는 7.3° → 1.9°로 개선되나 lane change metric은 seed range 내에서 변화 없음 |
+| (2) rule(1.75 m band) 추가 | 기각 | band는 binding constraint가 아님. 3.6 m 적용군 463건 hit rate 12.5% vs 1.75 m 적용군 159건 11.9% |
+
+### 4.2 실제 원인
+
+1. **lateral mode axis 부재** — 동일 route의 sub-mode 간 종방향 endpoint spread 11.32 m, 횡방향 0.31 m (실패의 55.7%)
+2. **candidate route coverage 부족** — ground truth를 ±1.75 m 내에 담는 route가 존재하는 비율 3.7%
+3. **관측 불가능 구간** — lane change의 49%가 prediction window에서 신규 시작함
+4. model은 initial residual angle을 정상적으로 수신하고도 ground truth보다 3배 빠르게 0으로 수렴시킴
+
+### 4.3 규모와 처방
+
+1. lane change 627건(2.51%), U-turn 73건(0.29%)
+2. lane change를 완전히 해결해도 전체 minADE6 개선 상한은 **−0.015 m**로, seed range(0.105)의 1/7임 — accuracy metric으로는 관측되지 않는 문제임
+3. 원인 ①에 대한 처방으로 동일 route의 2·3번째 mode를 ±lane width(3.42 m)로 유도하는 auxiliary loss를 구현했음, 3 seeds 대기 중임
+
+---
+
+## 5. Data cleansing — 폐기 vs 보정
+
+### 5.1 결론
+
+1. **폐기 대상은 거의 없음** — 결함 2건을 수정하면 폐기 대상이 train의 0.17%(약 340건)로 감소함
+2. pedestrian·cyclist는 폐기 시 오히려 성능이 저하됨 (val minADE 1.490 → 1.522)
+
+### 5.2 전수 집계 (train + val 224,896건)
+
+| item | ratio | 해석 |
+| --- | --- | --- |
+| no candidate route | 3.9% | 81.5%가 pedestrian·cyclist. vehicle만 0.78% |
+| off-road | 4.6% | 99.7%가 pedestrian·cyclist |
+| coverage failure | 14.4% | turn·lane change가 대부분이라 폐기 불가 |
+| our heading의 급격한 변화 | 0.79% | AV2 원본 0.01% — roughness는 preprocessing에서 유입된 것임 |
+
+### 5.3 발견 결함 2건 (수정 완료)
+
+1. **candidate lane distance를 centerline vertex 기준으로 측정하고 있었음**
+   - vehicle "no route" 사례의 91%가 실제로는 lane polyline 위에 있었음(중앙 0.49 m)
+   - vertex 간격이 5 m를 초과하는 구간에서 lane 위 차량이 search radius 밖으로 배제됐음
+   - point-to-segment distance로 수정했음
+2. **AV2 body heading이 반전된 scenario 18건의 minADE6이 15.07 m였음** (전체 1.49)
+   - normalization frame과 candidate route filter가 동일 각도를 사용해 scene 전체가 반전됨
+   - 이동 구간 기준 판정으로 교정했음
+
+### 5.4 폐기 불가 항목
+
+1. window edge ramp (첫/끝 0.5 s의 position-derived speed가 실제의 약 절반)
+2. stationary track의 heading 미정의 (33.4%)
+3. slip angle
+
+---
+
+## 6. Visualization framework
+
+### 6.1 결론
+
+1. agent 기반 자동화 framework를 정식화했음 — 정성 평가 산출물이 재현 가능해졌음
+2. 요청하신 **scenario grouping + ID 기록**을 산출물 규격에 반영했음
+
+### 6.2 구성
+
+1. agent 정의 파일에 필수 요건 11가지를 명시했음 — time series, 상태별 통계, scenario별 지표, loss 분해, grouped small multiples, unit 통일, step marker, 대표 scenario, 자체 검증, 특성 표, decision tree
+2. 표준 작업 A(checkpoint 분석: dump → cases → stats → gallery), 표준 작업 B(epoch별 학습 방향)로 고정했음
+3. 모든 분석에서 **독립 검토 agent**가 핵심 수치를 재계산함 — 지금까지 3회 수행, 지적 사항 60여 건 반영했음
+4. scenario ID는 유형별로 묶어 json에 저장함 — 예: lane change 분석의 `id_groups.json`(실패 유형 A/B/C/D × 시작 시점 12칸)
+
+---
+
+## 7. 비교 방법론 — seed variance (신규 발견)
+
+### 7.1 문제
+
+1. 동일 설정을 seed만 바꿔 실행한 결과가 1.407 / 1.415 / **1.547**이었음 (range 0.140)
+2. 기존에 "effect"로 보고하던 차이(0.02~0.11)보다 큼
+3. seed 2는 training failure가 아님 — train loss가 가장 낮았음. 더 낮은 training loss가 더 낮은 generalization으로 이어진 사례임
+
+### 7.2 해법 — paired-seed comparison
+
+| comparison | paired difference | seed별 부호 | 판정 |
 | --- | --- | --- | --- |
-| 10 Hz → 2 Hz 입력 | +0.113 ± 0.016 | 일치 | **2 Hz가 확실히 나쁨** |
-| 벌점 없음 → 벌점 1.0 | +0.058 | 일치 | **벌점 대가 확인** |
-| 전처리 평활 적용 | −0.053 ± 0.069 | 불일치 | 가릴 수 없음 |
+| 10 Hz → 2 Hz input | +0.113 ± 0.016 | 일치 | **2 Hz가 유의하게 나쁨** |
+| no penalty → penalty 1.0 | +0.058 | 일치 | **accuracy cost 확인** |
+| smoothing 적용 | −0.053 ± 0.069 | 불일치 | 검출 불가 |
 
-### 3.3 규칙
+### 7.3 적용 규칙
 
-1. 시드 1개 차이가 0.15 m 미만이면 "효과"로 쓰지 않음
-2. 새 주장은 시드 3개 이상, 평균과 범위를 함께 적음
-3. best 에폭 하나로 비교하지 않고 최근 5에폭 평균을 씀
+1. 단일 seed 차이가 0.15 m 미만이면 effect로 보고하지 않음
+2. 신규 주장은 seed 3개 이상, 평균과 range를 함께 기재함
+3. best epoch 단일 값으로 비교하지 않고 last-5-epoch 평균을 사용함
 
 ---
 
-## 4. 데이터 정제
+## 8. 진행 중 실험
 
-### 4.1 전수 집계 (224,896건)
-
-| 항목 | 비율 | 해석 |
+| experiment | 판정 대상 | 상태 |
 | --- | --- | --- |
-| 경로 없음 | 3.9% | 81.5%가 보행자·자전거. 차량만 0.78% |
-| 도로 밖 | 4.6% | 99.7%가 보행자·자전거 |
-| 커버리지 실패 | 14.4% | 회전·차선변경이라 버릴 수 없음 |
-| 우리 h의 급격한 방향 변화 | 0.79% | AV2 원본 0.01% — 거칠기는 전처리가 들여온 것임 |
+| no penalty × 3 seeds | penalty의 accuracy cost | 2 seeds 완료 (+0.058 m) |
+| neighborhood vehicles × 3 seeds | neighbor input 효과 | 1 seed 완료 (+0.026 m) |
+| coordinate-based penalty × 3 seeds | penalty target 교체 효과 | 대기 |
+| cleansed preprocessing × 3 seeds | 결함 2건 수정 효과 | 대기 |
+| lateral mode axis × 3 seeds | lane change | 대기 |
 
-### 4.2 발견 결함
+### 실행 환경 메모
 
-1. 차로 후보 거리를 중심선 "정점"으로 재고 있었음
-   - 차량 "경로 없음"의 91%가 사실 차로 위였음 (폴리라인까지 0.49 m)
-   - 정점 간격이 5 m를 넘는 곳에서 선 위 차량이 반경 밖으로 밀려났음 → 점-선분 거리로 수정했음
-2. AV2 차체 방향이 뒤집힌 시나리오 18건의 minADE6이 15.07 m였음 (전체 1.49)
-   - 좌표계와 후보 경로가 통째로 반대가 됐음 → 움직인 구간으로 판정해 교정했음
-
-### 4.3 판단
-
-1. 고치고 나면 버릴 대상이 train의 0.17%(약 340건)로 줄어듦
-2. 보행자·자전거는 빼면 오히려 점수가 나빠졌음 (1.490 → 1.522)
-3. 창 가장자리 램프·정지 트랙 방향 미정의는 버릴 수 없는 항목으로 분류했음
+1. cache는 preprocessing source의 hash로 키가 결정됨 — 학습 대기 중 `src/`를 수정하면 cache miss로 즉시 실패함. 실제로 이 문제로 13시간의 GPU idle이 발생했음
+2. 대응 — 남은 12판을 **단일 script**로 재구성했음. batch 3판씩 병렬, 앞 batch 종료 후 다음 batch 시작, 중간에 cache를 다시 생성함(약 12분)
+3. 학습 진행 중에는 `src/` 수정을 중단함
 
 ---
 
-## 5. 차선변경
+## 9. Summary
 
-### 5.1 가설 검증
-
-| 가설 | 판정 | 근거 |
-| --- | --- | --- |
-| 평활로 해결됨 | ✗ | 입력 각도 오차는 7.3° → 1.9°로 개선되나 차선변경 지표는 시드 범위 안이었음 |
-| 밴드(1.75 m) 규칙 추가 | ✗ | 밴드는 구속이 아니었음. 3.6 m인 463건 적중 12.5% vs 1.75 m인 159건 11.9% |
-
-### 5.2 실제 원인
-
-1. 횡방향 모드 축이 없음 — 같은 경로 하위 모드가 앞뒤 11.32 m, 좌우 0.31 m만 퍼짐 (실패의 55.7%)
-2. 후보 경로가 목표 차로를 담는 비율이 3.7%임
-3. 절반(49%)이 예측 구간에 새로 시작해 관측만으로는 알 수 없음
-4. 모델은 시작 각도를 제대로 받고도 정답보다 3배 빨리 0으로 되돌렸음 — 옆으로 가기를 거부함
-
-### 5.3 규모와 처방
-
-1. 차선변경 627건(2.5%) · U턴 73건(0.3%)
-2. 전부 해결해도 전체 점수 이득은 −0.015 m — 정확도 지표로는 안 보이는 문제임
-3. 같은 경로의 둘째·셋째 모드를 ±차로폭으로 미는 보조 손실을 넣었음. 3시드 대기 중임
-
----
-
-## 6. 주변 차량
-
-1. 반경 30 m 안 차량의 과거 5초를 0.5초 간격으로 입력에 붙였음 (상대위치·진행방향·관측여부 5채널)
-2. 차량별 임베딩 후 focal 궤적을 질의로 attention 집약했음. 파라미터 45.1만 → 55.6만
-3. 첫 시드 결과 +0.026 m(약간 나쁨) — 3시드를 채워 판정할 예정임
-4. 이 입력의 값어치는 전체 점수가 아니라 "예측 구간에 새로 시작하는 309건"에서 봐야 함
-
----
-
-## 7. 진행 중 실험
-
-| 실험 | 판정 대상 | 상태 |
-| --- | --- | --- |
-| 벌점 없음 3시드 | 벌점의 대가 | 2시드 완료 (−0.058 m) |
-| 주변 차량 3시드 | 주변 차량 효과 | 1시드 완료 (+0.026 m) |
-| 좌표 기준 벌점 3시드 | 벌점의 올바른 형태 | 대기 |
-| 정제판 3시드 | 데이터 결함 수정 효과 | 대기 |
-| 횡 모드 축 3시드 | 차선변경 | 대기 |
-
-- 전부 30에폭이고 같은 시드끼리 짝지어 비교함
-
----
-
-## 8. 결론
-
-1. 흔들림 벌점은 정확도 4%를 주고 진동 17배를 사는 거래였음
-2. 그 효과를 재던 지표가 모델 출력을 그대로 다시 보는 자기참조였음
-3. 실제 궤적의 방향 변화는 벌점이 누르는 값이 아니라 적분기 기하가 주로 만들고 있었음
-4. 문헌도 같은 함정을 지적하고 있어 벌점 대상을 좌표 기준으로 바꾸는 실험을 진행 중임
-5. 그 과정에서 전처리 평활 무효, 데이터 결함 2건, 차선변경의 실제 원인을 찾았음
-6. 가장 큰 발견은 **같은 설정도 시드에 따라 0.14 m 흔들린다**는 것이었음 → 모든 비교를 짝비교로 전환했음
+1. jitter penalty는 accuracy cost +0.058 m로 kinematic violation rate를 17배 낮춤 — 유지하되 형태를 교체할 근거를 확보했음
+2. 기존 violation metric은 penalty가 최소화하는 변수를 그대로 측정하는 self-referential metric이었음
+3. coordinate 기준으로 보면 violation의 주항은 model output이 아니라 **integrator geometry**였음 (기여 75%)
+4. preprocessing smoothing은 기존 방식이 무효였고, 신규 방식은 input quality를 개선했으나 accuracy 이득은 검출되지 않았음
+5. lane change 실패 원인은 smoothing도 band rule도 아닌 **lateral mode axis 부재**였음
+6. data cleansing 대상은 폐기가 아니라 보정이 적절함 — 결함 2건 수정으로 폐기 대상이 0.17%까지 감소함
+7. 가장 중요한 방법론적 발견은 **seed variance 0.140 m**이며, 이후 모든 비교를 paired-seed로 전환했음
