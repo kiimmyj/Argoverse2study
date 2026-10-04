@@ -209,6 +209,11 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
+    ap.add_argument("--smooth-mode", dest="smooth_mode", default="action",
+                    choices=["action", "xy", "both"],
+                    help="흔들림 벌점을 무엇에 걸지 — action=액션 차분(지금), xy=예측 좌표의 방향 변화 힌지")
+    ap.add_argument("--smooth-xy", dest="smooth_xy", type=float, default=1.0,
+                    help="좌표 기준 벌점 가중치")
     ap.add_argument("--lat-modes", dest="lat_modes", type=float, default=0.0,
                     help="횡 모드 축 보조 손실 가중치 — 같은 경로의 둘째·셋째 슬롯을 ±차로폭으로 민다")
     ap.add_argument("--cleanse", type=int, default=0,
