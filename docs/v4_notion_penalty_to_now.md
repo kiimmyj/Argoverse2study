@@ -1,8 +1,9 @@
 # v4 Progress Report — Previous Action Item 대응
 
-> 기간 2026-09-16 ~ 09-30 · dataset Argoverse 2 (train 199,908 / val 24,988)
-> baseline: L4 · jitter penalty 1.0 · 30 epoch cosine LR · seed 0~2
-> 모든 비교는 **paired-seed**(같은 seed끼리 짝지어 차이를 봄) 기준임
+> 기간 2026-09-16 ~ 10-06 · dataset Argoverse 2 (train 199,908 / val 24,988)
+> baseline: L4 · action penalty 1.0 · 30 epoch cosine LR · seed 0~2
+> 총 24판(8 conditions × 3 seeds) 학습 완료. 모든 비교는 **paired-seed**(같은 seed끼리 짝지어 차이를 봄) 기준임
+> feasibility 지표는 전부 **predicted coordinate에서 복원한 heading** 기준임(model output 기준 아님)
 
 ---
 
@@ -10,23 +11,63 @@
 
 ### 1.1 결론
 
-1. **필요함.** 단 accuracy cost가 있음 — minADE6 +0.058 m (약 4%) 증가, 대신 kinematic violation rate가 17배 감소함
-2. **현재 형태는 부적절함.** penalty가 누르는 변수가 실제 trajectory의 heading 변화를 0.3%만 설명함
-3. **개선안을 구현했음** — penalty target을 model output에서 **predicted coordinate**로 교체, 3 seeds 학습 중임
+1. **필요함** — penalty 없이 학습하면 top-1 trajectory step의 **8.47%**가 label 상한(7.3°/step)을 넘음. ground truth label은 0.35%임(24배)
+2. **target을 model output(action)에서 predicted coordinate로 교체하는 것이 우월함** — coordinate penalty 1.0은 accuracy cost가 검출되지 않으면서(paired ΔminADE6 **+0.000 m**) violation을 **0.29배**로 낮춤
+3. **현재 action penalty는 violation rate만 낮추고 turn 구조를 flatten시킴** — turn scenario의 |Δψ| median이 0.16°/step으로 ground truth(1.10°)의 1/7임. accuracy cost도 turn에 집중됨(+0.164 m)
+4. **권고** — accuracy 우선이면 coordinate penalty 1.0, kinematic realism 우선이면 coordinate penalty 3.0임. 현재 설정(action penalty 1.0)은 둘 중 어느 기준으로도 최적이 아님
 
-### 1.2 필요성 검증 — paired-seed A/B
+### 1.2 측정 설계
 
-| condition | minADE6 (last 5 epochs) | violation rate (>7.3°/step) | jitter | off-band |
-| --- | --- | --- | --- | --- |
-| no penalty (seed 0 / 1) | **1.342 / 1.363** | 17.45% / 19.39% | 1.78 / 1.90 | 0.47 / 0.49 |
-| penalty 1.0 (seed 0 / 1) | 1.407 / 1.415 | **1.05% / 1.14%** | **0.003** | 0.53 / 0.52 |
-| paired difference | **+0.058 m** | −17배 | −600배 | 차이 없음 |
+1. 5개 condition × 3 seeds = 15판을 동일 조건(30 epoch cosine · train 199,908 / val 24,988)으로 학습했음
+2. 평가 지표를 **predicted coordinate에서 복원한 heading**으로 통일했음 — ψ = atan2(Δy, Δx), |Δψ| > 7.3°/step인 step 비율임. 양쪽 step 속력이 1 m/s 이상일 때만 셈(정지 구간은 heading이 정의되지 않음)
+3. 평가 대상은 **top-1 mode**임 — 실제 사용되는 trajectory임. alive 6 modes 기준값도 함께 기록했음
+4. ground truth label에 동일한 식을 적용해 기준선을 둠(0.35%)
+5. 재현 확인 — 재채점한 minADE6가 학습 로그의 best 값과 소수점 3자리까지 일치했음
+6. baseline과 신규 판의 val cache는 directory명(source hash)이 다르나 **배열 단위로 내용이 동일함을 확인했음** — paired 비교의 전제임
+7. 측정 코드 `src/score_xy_viol.py`, 결과 `runs/v4_xy_viol.json`, 작도 `src/viz_v4_penalty_pareto.py`임
 
-1. 두 seed에서 부호가 일치해 effect가 확인됨
-2. 기존에 보고한 accuracy cost(0.106 m)를 **0.058 m로 정정했음** — 기존 값은 seed variance와 섞여 있었음
-3. penalty를 제거하면 predicted trajectory의 약 20%가 실제 차량이 낼 수 없는 yaw rate를 가짐
+### 1.3 결과 — penalty 유무와 target별 비교
 
-### 1.3 metric 결함 — self-referential measurement
+| condition | minADE6 (3 seeds 평균) | seed range | coordinate violation (top-1) | paired ΔminADE6 vs no penalty | violation 배율 |
+| --- | --- | --- | --- | --- | --- |
+| no penalty | **1.359** | 0.035 | 8.47% | — | 1.00× |
+| **coordinate penalty 1.0** | **1.359** | **0.006** | 2.28% | **+0.000** (부호 불일치 = 검출 불가) | **0.29×** |
+| coordinate penalty 3.0 | 1.442 | 0.137 | 1.13% | +0.083 (부호 일치) | 0.15× |
+| action penalty 1.0 (현행) | 1.440 | 0.105 | **0.76%** | +0.081 (부호 일치) | 0.10× |
+| action + coordinate | 1.459 | 0.107 | 0.79% | +0.100 (부호 일치) | 0.10× |
+| ground truth label | — | — | 0.35% | — | — |
+
+1. **8.47% → 2.28% 구간은 accuracy cost 없이 얻어짐** — coordinate penalty 1.0의 paired 차이가 seed별로 +0.018 / −0.003 / −0.014로 부호가 갈림
+2. **2.28% 아래로 내리는 것부터 비용이 발생함** — target이 action이든 coordinate든 약 +0.08 m로 동일함. 즉 cost는 target이 아니라 **얼마나 강하게 누르는가**의 함수임
+3. action penalty도 coordinate violation을 실제로 낮춤(8.47% → 0.76%) — 1.5의 counterfactual 해석을 정정함
+4. **seed range가 penalty 강도에 비례함** — no penalty 0.035, coordinate 1.0 **0.006**, 강한 penalty 3종 0.105~0.137임. 기존에 "seed noise 0.140"으로 보고한 값은 데이터셋 고유 성질이 아니라 **strong penalty 조건에서만 나타나는 optimization 불안정**이었음
+
+![](figures/v4/penalty/penalty_pareto.png)
+
+### 1.4 회전량별 분해 — 비용이 어디에서 발생하나
+
+ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다시 측정했음(직진 15,711 / 완만 5,256 / 회전 4,021건).
+
+| | 직진 <5° | 완만 5–30° | 회전 ≥30° |
+| --- | --- | --- | --- |
+| **paired ΔminADE6 vs no penalty** | | | |
+| coordinate penalty 1.0 | −0.006 (불일치) | −0.003 (불일치) | **+0.030** |
+| action penalty 1.0 | +0.055 | +0.093 | **+0.164** |
+| action + coordinate | +0.079 | +0.116 | +0.165 |
+| **\|Δψ\| median [°/step]** | | | |
+| ground truth label | 0.12 | 0.35 | **1.10** |
+| action penalty 1.0 | 0.06 | 0.09 | **0.16** |
+| coordinate penalty 3.0 | 0.38 | 0.55 | **0.90** |
+| coordinate penalty 1.0 | 1.69 | 1.63 | 2.12 |
+| no penalty | 2.86 | 3.34 | 4.68 |
+
+1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 비용이 직진 +0.055 대비 turn **+0.164 m**로 3배임. 즉 jitter만 억제하는 것이 아니라 **실제 회전까지 억제하고 있음**
+2. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
+3. coordinate penalty 3.0이 **turn의 heading 변화 분포를 가장 잘 재현함**(0.90° vs ground truth 1.10°) — minADE6는 action penalty와 동일함(1.442 vs 1.440)
+4. coordinate penalty 1.0은 반대로 모든 구간에서 ground truth보다 과하게 움직임(1.63~2.12°) — violation 2.28%의 내용임
+5. **violation rate 단일 지표로는 action penalty가 1위지만, ground truth 분포 재현으로 보면 coordinate penalty 3.0이 1위임** — 두 기준이 갈리므로 목적에 따라 선택해야 함
+
+### 1.5 metric 결함 — self-referential measurement
 
 | condition | model output 기준 | predicted coordinate 복원 기준 |
 | --- | --- | --- |
@@ -35,20 +76,21 @@
 | ground truth label | — | 0.351% |
 
 1. violation rate를 **model이 출력한 각도**에서 측정하고 있었음 — penalty가 직접 최소화하는 변수임
-2. term별 제거 실험으로 기여도를 분리했음
+2. 학습된 model에서 term을 제거하는 counterfactual로 기여도를 분리했음
 
 | removed term | violation rate (baseline 0.735%) |
 | --- | --- |
 | integrator geometry correction | **0.186%** (−75%) |
 | route curvature | 0.423% (−42%) |
-| **model output (Δθ)** | **0.733% (−0.3%)** |
+| model output (Δθ) | 0.733% (−0.3%) |
 
-3. model output을 전부 제거해도 violation rate가 0.3%만 변함
-4. 원인 — internal heading `h = k(s) + θ`가 model이 실제로 생성하는 trajectory의 heading과 다름
+3. 즉 **학습이 끝난 model에서는** Δθ를 제거해도 coordinate violation이 0.3%만 변함
+4. **정정** — 이로부터 "penalty가 trajectory와 무관한 변수를 누른다"고 해석했으나, 1.3의 학습 A/B에서 action penalty가 coordinate violation을 8.47% → 0.76%로 낮추는 것이 확인됨. counterfactual은 **고정된 해 주변의 민감도**를 재는 것이고, penalty는 route 선택·속도 profile을 포함한 **해 전체를 바꾸는 방식으로** 작동함
+5. 유지되는 결론은 **measurement 측면**임 — model output 기준 지표는 penalty를 걸면 정의상 내려가므로 **penalty 설정 비교에 사용할 수 없음**. 1.3·1.4의 모든 수치를 coordinate 기준으로 다시 측정한 이유임
 
 ![](figures/v4/feasibility/m1_2_self_vs_xy.png)
 
-### 1.4 Literature review
+### 1.6 Literature review
 
 1. kinematic integrator/control output으로 violation을 0%로 만든 사례 3편은 **smoothness loss term이 없음** (DKM, PTNet, TPK)
 2. 단 "smooth output ≠ accurate heading"이 반복 보고됨 — Bézier basis를 써도 heading error는 별도 loss로 처리해야 했음 (SIMPL: minFYE6 0.297 → 0.076)
@@ -56,11 +98,11 @@
 4. smoothness evaluation의 사실상 표준은 모두 **coordinate 기반**임 (WOSAC angular velocity distribution, curvature, turning radius)
 5. seed variance를 다룬 STEP(2025)은 "작은 성능 차이는 training noise로 설명되는 경우가 많다"고 보고함 — 본 프로젝트 관측과 일치함
 
-### 1.5 개선안 — coordinate-based penalty
+### 1.7 구현
 
-1. predicted coordinate에서 복원한 heading의 step 변화가 7.3°를 초과하는 분량만 hinge로 penalize함
+1. predicted coordinate에서 복원한 heading의 step 변화가 7.3°를 초과하는 분량만 hinge로 penalize함 — 임계 내 turn은 누르지 않음
 2. unit test 통과 — straight 0, 임계 내 turn(7°/step) 0, stationary 0, zigzag(20°/step)만 penalty 발생함
-3. 3 seeds 학습 대기 중임
+3. `--smooth-mode {action,xy,both} --smooth-xy <weight>`로 선택함
 
 ---
 
@@ -118,7 +160,9 @@
 ### 3.1 결론
 
 1. 요청대로 **radius 30 m** 단순 방식으로 구현 완료했음
-2. seed 0 결과는 +0.026 m(소폭 악화) — 3 seeds를 채워 판정 예정임
+2. 3 seeds 완료 — paired ΔminADE6 **−0.028 ± 0.048 m**, seed별 +0.019 / −0.026 / −0.076으로 **부호가 갈려 전체 지표로는 효과가 검출되지 않음**
+3. 회전량별로 나눠도 동일함 — 직진 −0.007 / 완만 −0.049 / 회전 −0.081, 모두 부호 불일치임
+4. 평균은 개선 방향이고 turn 구간에서 가장 큼 — 효과가 있다면 **neighbor가 실제로 영향을 주는 scenario에 국한될 가능성이 큼**. 3.3의 전용 평가군으로 판정해야 함
 
 ### 3.2 구현
 
@@ -129,7 +173,8 @@
 
 ### 3.3 평가 계획
 
-1. 전체 minADE6로는 효과가 보이지 않을 가능성이 큼 — lane change 분석에서 "prediction window 내 신규 시작 309건"을 별도 평가군으로 지정했음
+1. 전체 minADE6로는 효과가 검출되지 않음이 확인됨(3.1) — lane change 분석에서 지정한 **"prediction window 내 신규 시작 309건"**을 전용 평가군으로 재측정해야 함
+2. 평가군이 309건(val의 1.2%)이므로 전체 지표에서는 0.15 m급 효과도 0.002 m로 희석됨 — 전용 평가군 없이는 판정 자체가 불가능함
 
 ---
 
@@ -156,7 +201,9 @@
 
 1. lane change 627건(2.51%), U-turn 73건(0.29%)
 2. lane change를 완전히 해결해도 전체 minADE6 개선 상한은 **−0.015 m**로, seed range(0.105)의 1/7임 — accuracy metric으로는 관측되지 않는 문제임
-3. 원인 ①에 대한 처방으로 동일 route의 2·3번째 mode를 ±lane width(3.42 m)로 유도하는 auxiliary loss를 구현했음, 3 seeds 대기 중임
+3. 원인 ①에 대한 처방으로 동일 route의 2·3번째 mode를 ±lane width(3.42 m)로 유도하는 auxiliary loss를 구현했음
+4. 3 seeds 완료 — paired ΔminADE6 **−0.013 ± 0.060 m**, 부호 불일치로 전체 지표에서는 효과가 검출되지 않음. 2에서 예측한 대로(상한 −0.015 m) **전체 metric으로는 판정 불가**이며, lane change 627건 전용 평가군으로 재측정해야 함
+5. 부작용 점검 — alive 6 modes 기준 coordinate violation이 1.72% → 2.98%로 증가했으나 top-1은 0.76% → 0.78%로 변화 없음. 즉 **횡방향으로 벌어진 보조 mode에서만 증가**했고 주 예측은 영향받지 않았음
 
 ---
 
@@ -166,6 +213,7 @@
 
 1. **폐기 대상은 거의 없음** — 결함 2건을 수정하면 폐기 대상이 train의 0.17%(약 340건)로 감소함
 2. pedestrian·cyclist는 폐기 시 오히려 성능이 저하됨 (val minADE 1.490 → 1.522)
+3. 결함 2건을 수정한 preprocessing으로 재학습한 결과 **3 seeds 모두 개선 방향**임 — paired ΔminADE6 −0.043 ± 0.049 m(−0.003 / −0.028 / −0.098). 크기는 작으나 부호가 일치해 **보정이 유효함을 확인했음**
 
 ### 5.2 전수 집계 (train + val 224,896건)
 
@@ -210,39 +258,69 @@
 
 ---
 
-## 7. 비교 방법론 — seed variance (신규 발견)
+## 7. 비교 방법론 — seed variance
 
-### 7.1 문제
+### 7.1 관측
 
-1. 동일 설정을 seed만 바꿔 실행한 결과가 1.407 / 1.415 / **1.547**이었음 (range 0.140)
-2. 기존에 "effect"로 보고하던 차이(0.02~0.11)보다 큼
-3. seed 2는 training failure가 아님 — train loss가 가장 낮았음. 더 낮은 training loss가 더 낮은 generalization으로 이어진 사례임
+1. 동일 설정을 seed만 바꿔 실행한 결과가 1.407 / 1.415 / **1.547**이었음(range 0.140)
+2. seed 2는 training failure가 아님 — train loss가 가장 낮았음. 더 낮은 training loss가 더 낮은 generalization으로 이어진 사례임
 
-### 7.2 해법 — paired-seed comparison
+### 7.2 정정 — seed variance는 조건에 의존함
+
+| condition | minADE6 seed range | coordinate violation |
+| --- | --- | --- |
+| coordinate penalty 1.0 | **0.006** | 2.28% |
+| no penalty | 0.035 | 8.47% |
+| cleansed (action penalty 1.0) | 0.026 | 0.75% |
+| action penalty 1.0 | 0.105 | 0.76% |
+| action + coordinate | 0.107 | 0.79% |
+| coordinate penalty 3.0 | 0.137 | 1.13% |
+
+1. seed range가 **penalty 강도와 함께 커짐** — 약하거나 없으면 0.006~0.035, 강하면 0.105~0.137임
+2. 즉 "seed noise 0.140"은 데이터셋·모델 고유 성질이 아니라 **strong penalty 조건의 optimization 불안정**임
+3. 불안정의 형태는 "3판 중 1판이 1.53 부근으로 이탈"임 — 평균이 아니라 **실패 판 1개가 range를 만듦**
+4. 부수 효과로, penalty를 coordinate 1.0으로 바꾸면 **재현성도 개선됨**(range 0.140 → 0.006)
+
+### 7.3 적용 규칙
+
+1. 비교의 1차 기준은 **paired-seed 차이의 부호 일치 여부**임 — 평균 크기보다 우선함
+2. 단일 임계(기존 "0.15 m 미만은 보고하지 않음")는 사용하지 않음 — 조건마다 range가 다르므로 **해당 조건의 range를 함께 기재함**
+3. 신규 주장은 seed 3개 이상이며, 평균·range·seed별 부호를 모두 기재함
+4. 효과가 특정 scenario에 국한될 수 있는 변경(neighbor, lane change)은 **전체 지표로 판정하지 않고 전용 평가군을 둠**
+
+### 7.4 적용 예
 
 | comparison | paired difference | seed별 부호 | 판정 |
 | --- | --- | --- | --- |
 | 10 Hz → 2 Hz input | +0.113 ± 0.016 | 일치 | **2 Hz가 유의하게 나쁨** |
-| no penalty → penalty 1.0 | +0.058 | 일치 | **accuracy cost 확인** |
-| smoothing 적용 | −0.053 ± 0.069 | 불일치 | 검출 불가 |
-
-### 7.3 적용 규칙
-
-1. 단일 seed 차이가 0.15 m 미만이면 effect로 보고하지 않음
-2. 신규 주장은 seed 3개 이상, 평균과 range를 함께 기재함
-3. best epoch 단일 값으로 비교하지 않고 last-5-epoch 평균을 사용함
+| no penalty → action penalty 1.0 | +0.081 | 일치 | **accuracy cost 확인** |
+| no penalty → coordinate penalty 1.0 | +0.000 | 불일치 | **cost 검출 불가** |
+| cleansed preprocessing | −0.043 ± 0.049 | 일치 | 개선 방향 일관 |
+| neighborhood vehicles | −0.028 ± 0.048 | 불일치 | 검출 불가 |
+| lateral mode axis | −0.013 ± 0.060 | 불일치 | 검출 불가 |
+| preprocessing smoothing | −0.053 ± 0.069 | 불일치 | 검출 불가 |
 
 ---
 
-## 8. 진행 중 실험
+## 8. 실험 현황
 
-| experiment | 판정 대상 | 상태 |
+조건당 3 seeds · 30 epoch cosine · train 199,908 / val 24,988. 총 24판 완료임.
+
+| experiment | 판정 대상 | 결과 |
 | --- | --- | --- |
-| no penalty × 3 seeds | penalty의 accuracy cost | 2 seeds 완료 (+0.058 m) |
-| neighborhood vehicles × 3 seeds | neighbor input 효과 | 1 seed 완료 (+0.026 m) |
-| coordinate-based penalty × 3 seeds | penalty target 교체 효과 | 대기 |
-| cleansed preprocessing × 3 seeds | 결함 2건 수정 효과 | 대기 |
-| lateral mode axis × 3 seeds | lane change | 대기 |
+| no penalty | penalty의 accuracy cost | 완료 — +0.081 m, violation 8.47% |
+| coordinate penalty 1.0 | penalty target 교체 | 완료 — **cost 검출 불가, violation 0.29×** |
+| coordinate penalty 3.0 | 강한 coordinate penalty | 완료 — +0.083 m, violation 0.15× |
+| action + coordinate | 두 target 동시 적용 | 완료 — +0.100 m, 단독 대비 이득 없음 |
+| neighborhood vehicles | neighbor input 효과 | 완료 — 전체 지표로는 검출 불가 |
+| lateral mode axis | lane change | 완료 — 전체 지표로는 검출 불가 |
+| cleansed preprocessing | 결함 2건 수정 효과 | 완료 — −0.043 m, 부호 일치 |
+
+### 다음 단계
+
+1. coordinate penalty 1.0을 **기본 설정으로 전환**함 — 이후 모든 비교의 baseline을 교체함
+2. neighbor·lateral mode를 **lane change 309건 전용 평가군**에서 재측정함
+3. turn 구간의 |Δψ| 분포를 ground truth에 맞추는 penalty 형태를 검토함 — 현재는 1.0이 과소, 3.0이 과대 억제임
 
 ### 실행 환경 메모
 
@@ -254,10 +332,12 @@
 
 ## 9. Summary
 
-1. jitter penalty는 accuracy cost +0.058 m로 kinematic violation rate를 17배 낮춤 — 유지하되 형태를 교체할 근거를 확보했음
-2. 기존 violation metric은 penalty가 최소화하는 변수를 그대로 측정하는 self-referential metric이었음
-3. coordinate 기준으로 보면 violation의 주항은 model output이 아니라 **integrator geometry**였음 (기여 75%)
-4. preprocessing smoothing은 기존 방식이 무효였고, 신규 방식은 input quality를 개선했으나 accuracy 이득은 검출되지 않았음
-5. lane change 실패 원인은 smoothing도 band rule도 아닌 **lateral mode axis 부재**였음
-6. data cleansing 대상은 폐기가 아니라 보정이 적절함 — 결함 2건 수정으로 폐기 대상이 0.17%까지 감소함
-7. 가장 중요한 방법론적 발견은 **seed variance 0.140 m**이며, 이후 모든 비교를 paired-seed로 전환했음
+1. penalty는 **필요함** — 제거하면 top-1 trajectory step의 8.47%가 label 상한을 넘음(ground truth 0.35%)
+2. penalty target을 model output에서 **predicted coordinate로 교체하면 accuracy cost 없이** violation을 0.29배로 낮춤 — 8.47% → 2.28% 구간은 무상임
+3. 2.28% 아래로 내리는 것부터 약 +0.08 m의 cost가 발생하며, 이는 target이 아니라 **penalty 강도**의 함수임
+4. 현행 action penalty의 cost는 **turn scenario에 집중됨**(+0.164 m) — jitter만이 아니라 실제 회전을 억제하고 있음. turn의 |Δψ| median이 ground truth의 1/7임
+5. 기존 violation metric은 penalty가 최소화하는 변수를 그대로 측정하는 self-referential metric이었음 — 모든 비교를 coordinate 기준으로 재측정했음
+6. preprocessing smoothing은 기존 방식이 무효였고, 신규 방식은 input quality를 개선했으나 accuracy 이득은 검출되지 않았음
+7. lane change 실패 원인은 smoothing도 band rule도 아닌 **lateral mode axis 부재**였음 — 구현했으나 전체 지표로는 효과가 검출되지 않아 전용 평가군이 필요함
+8. data cleansing 대상은 폐기가 아니라 보정이 적절함 — 결함 2건 수정으로 폐기 대상이 0.17%까지 감소했고, 재학습에서 3 seeds 모두 개선 방향이었음
+9. **seed variance 0.140 m는 데이터셋 고유 성질이 아니라 strong penalty 조건의 optimization 불안정이었음** — coordinate penalty 1.0에서는 0.006으로 감소함. 비교 기준을 paired-seed 부호 일치로 전환했음

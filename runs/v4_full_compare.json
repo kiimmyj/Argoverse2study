@@ -1,7 +1,9 @@
 {
   "val_cache": {
     "ah2": "/data/argoverse2/cache/v4/val_e67373005962be8a_n24988",
-    "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988"
+    "ah2_2hz": "/data/argoverse2/cache/v4/val_32e2b95fe31293fd_n24988",
+    "ah3": "/data/argoverse2/cache/v4/val_24680ab01288f6db_n24988",
+    "ah3_2hz": "/data/argoverse2/cache/v4/val_db95e6d6e8e9c046_n24988"
   },
   "label_dtheta_deg": 7.3,
   "runs": {
@@ -541,7 +543,81 @@
         "jitter_theta": 0.0009573369374752277,
         "jitter_a": 0.0045270223607374975
       }
+    },
+    "v4_l4nw_ah3_full_sm1_cos30_s0": {
+      "name": "L4 10Hz·평활·cos30",
+      "input": "ah3",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 1.0,
+      "best_epoch": 26,
+      "checkpoint": "runs/lstm_v4_l4nw_ah3_full_sm1_cos30_s0.pth",
+      "logged_best": [
+        1.4770117485372471,
+        3.4113502673421916
+      ],
+      "lr_sched": "cosine",
+      "epochs": 30,
+      "epoch_sec_median": 136.6062968969345,
+      "total_min": 67.67239572207133,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.4961733779907227,
+        "minFDE6": 3.398171279907227,
+        "offlane": 0.49592499999999995,
+        "dtheta_over_label_pct": 1.179223619464188,
+        "jitter_theta": 0.0010556419195971551,
+        "jitter_a": 0.004884513892522596
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.4770117485372471,
+        "minFDE6": 3.4113502673421916,
+        "offlane": 0.4921655728082809,
+        "dtheta_over_label_pct": 1.1619217879390313,
+        "jitter_theta": 0.0010385526641875575,
+        "jitter_a": 0.004784547184012446
+      }
+    },
+    "v4_l4nw_ah3_2hz_full_sm1_cos30_s0": {
+      "name": "L4 2Hz·평활·cos30",
+      "input": "ah3_2hz",
+      "th0": "guard",
+      "train_n": 199908,
+      "val_n_selected": 24988,
+      "smooth": 1.0,
+      "offlane": 1.0,
+      "best_epoch": 24,
+      "checkpoint": "runs/lstm_v4_l4nw_ah3_2hz_full_sm1_cos30_s0.pth",
+      "logged_best": [
+        1.4451956412344527,
+        3.318602095265493
+      ],
+      "lr_sched": "cosine",
+      "epochs": 30,
+      "epoch_sec_median": 125.58023703098297,
+      "total_min": 62.145506449540456,
+      "val2000": {
+        "n": 2000,
+        "minADE6": 1.49778062915802,
+        "minFDE6": 3.4067000312805176,
+        "offlane": 0.5094416666666667,
+        "dtheta_over_label_pct": 1.101366867140514,
+        "jitter_theta": 0.0008211401280145382,
+        "jitter_a": 0.001857938704952117
+      },
+      "val24988": {
+        "n": 24988,
+        "minADE6": 1.4451956412344527,
+        "minFDE6": 3.318602095265493,
+        "offlane": 0.5126160557067392,
+        "dtheta_over_label_pct": 1.1289941535648687,
+        "jitter_theta": 0.0008272830263210579,
+        "jitter_a": 0.0018492243715216871
+      }
     }
   },
-  "sec": 150.54001784324646
+  "sec": 173.59776759147644
 }
