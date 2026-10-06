@@ -147,7 +147,9 @@ def dataset_kwargs(args):
                 h_src=args.h_src,
                 routes=args.level != "l2",
                 fallback=args.fallback,
-                input_repr=args.input, cleanse=getattr(args, "cleanse", 0))
+                input_repr=args.input, cleanse=getattr(args, "cleanse", 0),
+                route_hist=getattr(args, "route_hist", 0),
+                lane_smooth=getattr(args, "lane_smooth", 0.0))
 
 
 def cache_key(split, dkw):
@@ -429,6 +431,10 @@ def main():
     p.add_argument("--cleanse", type=int, default=0,
                    help="1 이면 전처리 결함 세 가지를 고친다 (train_v4 --cleanse 와 같아야 캐시를 찾는다)")
     p.add_argument("--input", default="raw5", choices=tuple(X_LEN))
+    p.add_argument("--lane-smooth", dest="lane_smooth", type=float, default=0.0,
+                   help="중심선 평활 sigma [m] (train_v4 --lane-smooth 와 같아야 캐시가 맞는다)")
+    p.add_argument("--route-hist", dest="route_hist", type=int, default=0,
+                   help="경로별 관측 이력 스텝 수 (train_v4 --route-hist 와 같은 값이어야 캐시가 맞는다)")
     p.add_argument("--th0", default="current", choices=("current", "guard"))
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--offlane", type=float, default=0.0)

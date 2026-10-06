@@ -100,7 +100,7 @@ def route_point(routes: torch.Tensor, route_tan: torch.Tensor, s: torch.Tensor,
 class V4Net(nn.Module):
     def __init__(self, in_dim=5, lane_in=N_PTS * 2 + N_RULE, hid=HID, k=K,
                  pred_len=PRED_LEN, out_dim=2, route_pts=N_RPTS, level="l3",
-                 th0_mode="current", agents_in=0):
+                 th0_mode="current", agents_in=0, route_hist_in=0):
         super().__init__()
         assert level in ("l2", "l3", "l0")
         assert th0_mode in ("current", "guard")
@@ -136,8 +136,11 @@ class V4Net(nn.Module):
             self.prob_head = nn.Linear(hid, k)
         else:
             # --- L3: 후보 경로 하나를 임베딩 (좌표 2 + 접선 2 + 밴드 2 = 점당 6채널) ---
+            # route_hist_in > 0 이면 경로마다 관측 구간 이력(H x 5)을 같이 넣는다 — '벗어나는 중인가'.
+            self.route_hist_in = int(route_hist_in)
             self.route_encoder = nn.Sequential(
-                nn.Linear(route_pts * 6 + 1, hid), nn.ReLU(), nn.Linear(hid, hid))
+                nn.Linear(route_pts * 6 + 1 + self.route_hist_in, hid), nn.ReLU(),
+                nn.Linear(hid, hid))
             # 같은 경로에 배정된 슬롯끼리 구별시키는 임베딩. 지도가 갈림길을 주지 않는
             # 직선 도로에서 모드가 통째로 붕괴하는 것을 막는 축이다 (종방향 다중성).
             self.sub_emb = nn.Embedding(k, hid)
@@ -187,7 +190,7 @@ class V4Net(nn.Module):
     def forward(self, x, lanes, lane_mask, lane_feat=None, routes=None,
                 route_tan=None, route_band=None, route_len=None,
                 route_sd0=None, route_mask=None, route_sub=None, v0=None, h0=None,
-                agents=None, agents_mask=None):
+                agents=None, agents_mask=None, route_hist=None):
         B = x.size(0)
         _, (h, _) = self.traj_encoder(x)
         traj_feat = h[-1]
@@ -227,6 +230,8 @@ class V4Net(nn.Module):
                          route_tan.reshape(B, Kk, M * 2),
                          (route_band / BAND_SCALE).reshape(B, Kk, M * 2),
                          (route_len / LEN_SCALE).unsqueeze(-1)], dim=2)
+        if getattr(self, "route_hist_in", 0):
+            rin = torch.cat([rin, route_hist.reshape(B, Kk, -1)], dim=2)
         route_emb = self.route_encoder(rin)
         if route_sub is None:
             route_sub = torch.zeros(B, Kk, dtype=torch.long, device=routes.device)

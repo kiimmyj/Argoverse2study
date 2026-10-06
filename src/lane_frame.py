@@ -101,6 +101,31 @@ def smooth(x: np.ndarray, w: int) -> np.ndarray:
     return np.convolve(np.pad(x, pad, mode="edge"), np.ones(w) / w, mode="valid")[:len(x)]
 
 
+def smooth_poly(pts: np.ndarray, sigma_m: float, step: float = STEP) -> np.ndarray:
+    """호길이 등간격 폴리라인을 가우시안으로 평활한다 (densify 직후에 쓴다).
+
+    왜 — k 는 원시 중심선 폴리라인의 중앙차분이라 **계단 함수**다. 실측(val 4,000):
+    |Δk| 가 정확히 0 인 점 72.1%, p99 14.26°/점, |Δk|>2° 의 16.6% 가 양옆이 평평한
+    고립 꺾임(지도 꼭짓점 인공물)이다. θ = h − k 가 이것을 물려받는다.
+
+    끝단은 **1차 외삽**으로 패딩한다. 가장자리 복제(mode='edge')로 패딩하면 시작
+    3σ 구간의 접선이 평평해지는데, 예측 시작점이 바로 거기다.
+    """
+    pts = np.asarray(pts, float)
+    if sigma_m <= 0 or len(pts) < 5:
+        return pts
+    r = max(1, int(round(3.0 * sigma_m / step)))
+    if len(pts) <= 2 * r:
+        r = max(1, (len(pts) - 1) // 2)
+    k = np.exp(-0.5 * ((np.arange(-r, r + 1) * step / sigma_m) ** 2))
+    k /= k.sum()
+    i = np.arange(1, r + 1)[::-1]
+    head = pts[0] + (pts[0] - pts[1]) * i[:, None]        # 1차 외삽
+    tail = pts[-1] + (pts[-1] - pts[-2]) * i[::-1][:, None]
+    pad = np.concatenate([head, pts, tail])
+    return np.stack([np.convolve(pad[:, j], k, mode="valid") for j in (0, 1)], axis=1)
+
+
 def tangents(pts: np.ndarray) -> np.ndarray:
     g = np.gradient(pts, axis=0)
     n = np.linalg.norm(g, axis=1, keepdims=True)
@@ -204,7 +229,7 @@ def build_routes(graph, starts, reach, max_hops: Optional[int] = None,
                  min_len_m: Optional[float] = None, max_routes: int = 40,
                  v0: Optional[float] = None, legacy: bool = False,
                  max_kink_deg: Optional[float] = None,
-                 stats: Optional[dict] = None) -> List[dict]:
+                 stats: Optional[dict] = None, smooth_m: float = 0.0) -> List[dict]:
     """시작 차로에서 **successor 만** 따라가며 '경로'(차로 시퀀스)를 만든다.
 
     왜 successor 만 쓰나
@@ -304,6 +329,11 @@ def build_routes(graph, starts, reach, max_hops: Optional[int] = None,
                     dropped.append((path, round(kink, 2)))
             elif (sarc[-1] >= min_len_m or len(path) >= max_hops
                   or (not legacy and not ext)):     # legacy 는 '수정 전 그대로'여야 한다
+                # 평활은 **꺾임 게이트를 통과한 뒤** 건다. 게이트는 '이 경로가 접혔나'를 재는
+                # 안전장치라 원시 기하로 판정해야 한다 — 평활을 먼저 걸면 접힌 경로가 통과한다.
+                if smooth_m > 0:
+                    d = smooth_poly(d, smooth_m)
+                    t = tangents(d)
                 routes.append({"lanes": path, "pts": d, "s": sarc, "tan": t})
 
         stack.extend(ext)

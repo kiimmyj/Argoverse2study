@@ -30,6 +30,8 @@ from torch.utils.data import Dataset
 from av2.datasets.motion_forecasting import scenario_serialization
 
 from dataset_map import OBS_LEN, PRED_LEN, N_LANES, N_PTS, _resample, _rotation_matrix
+
+BAND_SCALE_DS = 3.6      # 횡오프셋 정규화 [m] — model_v4.BAND_SCALE 과 같은 눈금
 import lane_frame as lf
 from heading_decomp import ah_features, ah_features_2hz, ah_features_v3, build_heading, wrap
 from lane_graph import LaneGraph, REACH_MARGIN_M
@@ -87,7 +89,8 @@ class Av2LaneRuleDataset(Dataset):
     def __init__(self, data_root: str, split: str = "train",
                  limit: Optional[int] = None, with_rules: bool = True,
                  centerline: str = "api", select: str = "centroid",
-                 theta_ch: bool = False, h_src: str = "av2",
+                 theta_ch: bool = False, h_src: str = "av2", route_hist: int = 0,
+                 lane_smooth: float = 0.0,
                  routes: bool = False, n_modes: int = N_MODES,
                  fallback: str = "straight1", input_repr: str = "raw5", cleanse: int = 0):
         """centerline / select 기본값은 dataset_map.py 와 숫자까지 일치하도록 맞춰져 있다.
@@ -123,6 +126,10 @@ class Av2LaneRuleDataset(Dataset):
         self.root = Path(data_root) / split
         self.with_rules = with_rules
         self.theta_ch, self.h_src = theta_ch, h_src
+        # 경로별 관측 이력 스텝 수 (0 이면 끔). 2 Hz 로 뽑으므로 10 이 관측 5초 전체다.
+        self.route_hist = int(route_hist)
+        # 중심선 평활 sigma [m] (0 이면 끔). k 의 계단을 없앤다 — lane_frame.smooth_poly
+        self.lane_smooth = float(lane_smooth)
         self.routes, self.n_modes = routes, n_modes
         self.fallback = fallback
         if input_repr not in ("raw5", "ah2", "ah2_2hz") and input_repr not in AH3_CFG:
@@ -240,6 +247,10 @@ class Av2LaneRuleDataset(Dataset):
                 [x, np.stack([np.sin(th) * vd, np.cos(th) * vd, vd], axis=1)],
                 axis=1).astype(np.float32)
 
+        # 경로별 θ 에 쓸 관측 진행방향. ah 계열은 입력 둘째 채널이 h 자체다(heading_decomp.ah_features).
+        h_obs = None
+        if self.route_hist and self.input_repr.startswith("ah") and x.shape[0] == OBS_LEN:
+            h_obs = x[:, 1].astype(np.float64)
         out = {
             "x": torch.from_numpy(x),
             "y": torch.from_numpy(y),
@@ -270,12 +281,13 @@ class Av2LaneRuleDataset(Dataset):
             out["n_reachable"] = torch.tensor(len(reach), dtype=torch.float32)
 
         if self.routes:
-            out.update(self._routes(g, starts, reach, speed, path_city, origin, R))
+            out.update(self._routes(g, starts, reach, speed, path_city, origin, R,
+                                    h_obs=h_obs))
             # 적분기 시작 잔차각 θ₀ = wrap(h0 − k(s0)) 에 쓴다 (model_v4 th0_mode="guard").
             out["h0"] = torch.tensor(h_last, dtype=torch.float32)
         return out
 
-    def _routes(self, g, starts, reach, speed, path_city, origin, R):
+    def _routes(self, g, starts, reach, speed, path_city, origin, R, h_obs=None):
         """L3: 후보 경로 K개를 예측 모드로 쓰기 위한 텐서들.
 
         순위는 **관측된 과거와의 적합도**로 매긴다 — 미래를 안 보므로 추론 때도 쓸 수 있고,
@@ -294,7 +306,8 @@ class Av2LaneRuleDataset(Dataset):
         straight6 1.4093 / fan 1.4237)의 차이는 시드 1개라 노이즈 범위다.
         """
         K, M = self.n_modes, N_RPTS
-        rts = lf.build_routes(g, starts, reach, v0=speed) if starts else []
+        rts = (lf.build_routes(g, starts, reach, v0=speed, smooth_m=self.lane_smooth)
+               if starts else [])
         if rts:
             order = np.argsort([lf.to_frame(path_city, r)[2] for r in rts])
             rts = [rts[i] for i in order]
@@ -313,6 +326,10 @@ class Av2LaneRuleDataset(Dataset):
         P = np.zeros((K, M, 2), np.float32); T = np.zeros((K, M, 2), np.float32)
         B = np.zeros((K, M, 2), np.float32); L = np.zeros(K, np.float32)
         SD = np.zeros((K, 2), np.float32)          # 현재 위치의 (s0, d0)
+        H = self.route_hist
+        # 경로별 관측 이력 — 모델은 지금까지 '현재의 d0' 만 받았다. '벗어나는 중인가' 는 궤적에만 있다.
+        HIST = np.zeros((K, max(H, 1), 5), np.float32)
+        hidx = np.arange(OBS_LEN - 1, -1, -(OBS_LEN // H if H else 1))[::-1][-H:] if H else None
         mask = np.zeros(K, np.float32)
         sub = np.zeros(K, np.int64)                # 같은 경로 위의 몇 번째 종방향 하위모드인가
         now = path_city[-1:]                        # 예측 시작점 (city 좌표)
@@ -335,6 +352,17 @@ class Av2LaneRuleDataset(Dataset):
             # 첫 스텝에서 궤적이 튀지 않는다.
             s0, d0, _ = lf.to_frame(np.concatenate([path_city, now]), r)
             SD[i] = (s0[-1], d0[-1])
+            if H:
+                # 접선은 **회전된** T[i] 를 쓴다 — h_obs 가 정규화 프레임이다.
+                ss, dd = s0[hidx], d0[hidx]
+                tx = np.interp(ss, q["s"], T[i][:, 0]); ty = np.interp(ss, q["s"], T[i][:, 1])
+                ok = (np.abs(dd) < 10.0).astype(np.float64)
+                if h_obs is not None:
+                    th = np.remainder(h_obs[hidx] - np.arctan2(ty, tx) + np.pi, 2 * np.pi) - np.pi
+                else:
+                    th = np.zeros(len(hidx)); ok = ok * 0.0
+                HIST[i] = np.stack([dd / BAND_SCALE_DS, (ss - s0[-1]) / 50.0,
+                                    np.sin(th) * ok, np.cos(th) * ok, ok], axis=1)
         if not rts:
             # 지도가 경로를 못 주는 구간(주차장·미매핑 도로 — val 의 3.75%).
             # 지도가 아무 정보도 안 주므로 다중모드를 기하로 만들 수밖에 없다.
@@ -358,13 +386,16 @@ class Av2LaneRuleDataset(Dataset):
                 B[i] = lf.WIDE_HALF_W; L[i] = ln; mask[i] = 1.0
                 sub[i] = i // n_geo
             n_dist = n_geo
-        return {"routes": torch.from_numpy(P), "route_tan": torch.from_numpy(T),
+        out = {"routes": torch.from_numpy(P), "route_tan": torch.from_numpy(T),
                 "route_band": torch.from_numpy(B), "route_len": torch.from_numpy(L),
                 "route_sd0": torch.from_numpy(SD), "route_mask": torch.from_numpy(mask),
                 "route_sub": torch.from_numpy(sub),
                 "n_distinct": torch.tensor(float(n_dist)),
                 "v0": torch.tensor(speed, dtype=torch.float32),
                 "route_fallback": torch.tensor(0.0 if rts else 1.0)}
+        if H:
+            out["route_hist"] = torch.from_numpy(HIST)
+        return out
 
 
 if __name__ == "__main__":

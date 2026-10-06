@@ -52,6 +52,8 @@ def to_dev(b, device, level, use_rules):
               lane_feat=b["lane_feat"].to(device) if use_rules else None)
     if level != "l2":
         kw.update({k: b[k].to(device) for k in ROUTE_KEYS})
+    if "route_hist" in b and level != "l2":
+        kw["route_hist"] = b["route_hist"].to(device)
     if "agents" in b:
         kw["agents"] = b["agents"].to(device)
         kw["agents_mask"] = b["agents_mask"].to(device)
@@ -242,6 +244,11 @@ def main():
                     help="1 이면 L4 를 버려진 모드에만 건다 (승자는 거리 손실이 감독)")
     ap.add_argument("--rules", type=int, default=1)
     ap.add_argument("--theta", type=int, default=1)
+    ap.add_argument("--lane-smooth", dest="lane_smooth", type=float, default=0.0,
+                    help="중심선 평활 sigma [m] (0=끔). k 가 원시 폴리라인 중앙차분이라 계단이다")
+    ap.add_argument("--route-hist", dest="route_hist", type=int, default=0,
+                    help="경로별 관측 이력 스텝 수 (0=끔, 10=관측 5초를 2 Hz 로). "
+                         "route encoder 에 (H x 5) 를 덧붙인다 — d, 종진행, sin/cos θ, valid")
     ap.add_argument("--h-src", dest="h_src", default="build", choices=["av2", "build"])
     ap.add_argument("--fallback", default="straight1", choices=["straight1", "straight6", "fan"],
                     help="지도가 경로를 못 주는 시나리오를 무엇으로 채울지. "
