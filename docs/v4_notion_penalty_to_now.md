@@ -350,7 +350,19 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 | prediction window 내 신규 (1,083) | 1.581 | 1.576 | −0.005 (불일치) | 1.41% → **0.52%** |
 | U-turn (73) | 2.657 | 2.684 | +0.027 (불일치) | 2.24% → 2.04% |
 
-9. weight 3.0은 재실행 중임 — 다른 session이 학습 중 `src/dataset_lane.py`를 수정해 cache key가 변경되면서 batch 전체가 즉시 실패했음. 해당 변경은 default off라 출력이 동일함을 bit-exact로 확인하고 cache re-keying으로 복구했음
+9. **weight 3.0 결과 — lane change에서 처음으로 3 seeds 부호가 일치했음**
+
+| 평가군 | coordinate 1.0 | + ly 1.0 | + ly 3.0 | ly3 paired Δ | seed별 부호 |
+| --- | --- | --- | --- | --- | --- |
+| 전체 24,988 | 1.359 | 1.372 | 1.376 | +0.017 | 일치 |
+| **D2 lane change 627** | 2.001 | 1.985 | **1.932** | **−0.069** | **일치** |
+| prediction window 내 신규 1,083 | 1.581 | 1.576 | 1.575 | −0.007 | 불일치 |
+| U-turn 73 | 2.657 | 2.684 | 2.673 | +0.016 | 불일치 |
+
+10. smoothing · band rule · neighborhood vehicles · lateral mode axis가 **전부 검출 불가**였던 문제에서 처음 확인된 일관된 효과임. lane change violation도 2.27% → 0.78%로 감소함
+11. **방향성이 반대인 두 loss가 구분됨** — coordinate penalty 3.0은 lane change −0.011(불일치)이고 prediction window 내 신규에서 **+0.061(일치, 악화)**, U-turn에서 **+0.201(일치, 악화)**임. smoothness 강화는 횡방향 운동을 함께 억제하나 lane-yaw는 그렇지 않음
+12. 전체 accuracy 기준으로는 weight 1.0이 knee point이고(1.372 vs 1.376), lane change까지 포함하면 3.0임
+13. 재실행 경위 — 다른 session이 학습 중 `src/dataset_lane.py`를 수정해 cache key가 변경되면서 batch 전체가 즉시 실패했음. 해당 변경은 default off라 출력이 동일함을 bit-exact로 확인하고 cache re-keying으로 복구했음 — 다른 session이 학습 중 `src/dataset_lane.py`를 수정해 cache key가 변경되면서 batch 전체가 즉시 실패했음. 해당 변경은 default off라 출력이 동일함을 bit-exact로 확인하고 cache re-keying으로 복구했음
 
 ### neighborhood vehicles / lateral mode axis — 전용 평가군 재측정
 
