@@ -1559,4 +1559,5 @@ python src/visualize_v4_modes.py --ckpt runs/lstm_v4_l0b_s0.pth --level l0 --out
 | `docs/v4_smoothing_study.md` | 전처리 평활 후보 31개 비교 (2.13절의 원본) |
 | `docs/v4_feasibility_metrics.md` | 실현가능성·매끄러움 측정 4가지 (2.14절의 원본) |
 | `docs/v4_notion_penalty_to_now.md` | 미팅 Action Item 대응 보고서 — 벌점·전처리·주변 차량·차선변경·cleansing·시각화 |
+| `docs/v4_overview_timeline.md` | 복습용 한 장 — 메인 아이디어 · h=k+θ · 모델 구성 · HD map 임베딩 · v1~v4 흐름(미팅 날짜별) |
 | `.claude/agents/v4-visualizer.md` | 시각화 전용 에이전트 정의 — 표준 작업 A(체크포인트 분석)·B(에폭별 분석) |
