@@ -360,11 +360,14 @@ def main():
 
     lane_in = N_PTS * 2 + (N_RULE if use_rules else 0)
     in_dim = (2 if args.input.startswith(("ah2", "ah3")) else 5) + (3 if args.theta else 0)
+    # route_hist 는 경로마다 (H x 5) 라 route encoder 입력이 그만큼 늘어난다.
+    rh_in = args.route_hist * 5 if args.route_hist else 0
     model = V4Net(in_dim=in_dim, lane_in=lane_in, level=args.level, th0_mode=args.th0,
-                  agents_in=agents_in).to(device)
+                  agents_in=agents_in, route_hist_in=rh_in).to(device)
     npar = sum(p.numel() for p in model.parameters())
     print(f"[{tag}] {device} | level {args.level} | offlane {args.offlane} | "
           f"fallback {args.fallback} | input {args.input} | th0 {args.th0} | in_dim {in_dim} "
+          f"| route_hist {args.route_hist} | lane_smooth {args.lane_smooth:g} "
           f"| params {npar:,} | train {len(tr)} val {len(va)}", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
