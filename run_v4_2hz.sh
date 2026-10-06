@@ -16,7 +16,7 @@ $PY -u src/prepare_v4.py --level l0 --input ah2_2hz --th0 guard --fallback strai
 grep -q "모든 점검 통과" /data/argoverse2/cache/v4/prepare_l0_ah2_2hz_full.log || exit 1
 
 C="--level l0 --input ah2_2hz --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-   --limit 199908 --val-limit 24988 --epochs 15 --lr 5e-4 --batch 32 --workers 8 --cache --outdir runs --smooth 1.0"
+   --limit 199908 --val-limit 24988 --epochs 15 --lr 5e-4 --batch 32 --workers 8 --cache --outdir runs --smooth-mode action --smooth 1.0"
 L4="--offlane 1.0 --off-nonwinner 1"
 $PY -u src/train_v4.py $C      --tag v4_l0_ah2_2hz_full_sm1_s0     > runs/v4_l0_ah2_2hz_full_sm1_s0.log     2>&1
 $PY -u src/train_v4.py $C $L4  --tag v4_l4nw_ah2_2hz_full_sm1_s0   > runs/v4_l4nw_ah2_2hz_full_sm1_s0.log   2>&1

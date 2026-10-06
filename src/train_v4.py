@@ -3,12 +3,20 @@ train_v4.py - v4 를 레벨별로 누적 학습한다.
 
   L2 : python src/train_v4.py --level l2                       (= 기준선 재현)
   L3 : python src/train_v4.py --level l3
-  L0 : python src/train_v4.py --level l0                       (흔들림 벌점 1.0 포함 — 아래)
+  L0 : python src/train_v4.py --level l0                       (흔들림 벌점 포함 — 아래)
   L4 : python src/train_v4.py --level l0 --offlane 1.0
 
 L0 는 '액션 출력 + Frenet 적분기 + 흔들림 벌점'이다 (2026-09-16 사용자 결정).
-흔들림은 액션 출력이 만드는 문제라 L0 의 일부로 두고, --level l0 이면 --smooth 기본값이 1.0 이다
-(jitter() 참고). 예전 L0 결과(벌점 없음)를 재현하려면 --smooth 0 을 준다.
+
+**기본 벌점은 좌표 기준이다 (2026-10-06 사용자 결정)** — `--smooth-mode xy --smooth-xy 1.0`.
+예측 좌표에서 복원한 진행방향의 스텝 변화가 7.3°/step 을 넘는 분량만 힌지로 벌한다(jitter_xy()).
+8조건 × 3시드 = 24판 결과: 액션 벌점(jitter())을 쓰면 minADE6 1.440 / 좌표 위반율 0.76%,
+좌표 벌점 1.0 은 **1.359 / 2.28%** 로 정확도 손해가 검출되지 않으면서 위반율은 벌점 없음(8.47%)의 0.29배다.
+액션 벌점의 대가는 회전에 몰린다(직진 +0.055 vs 회전 +0.164 m) — 실제 회전까지 누른다.
+자세한 근거는 docs/v4_notion.md 2.16절.
+
+예전 판을 재현하려면 **모드를 명시한다** — 액션 벌점판은 `--smooth-mode action --smooth 1.0`,
+벌점 없는 판은 `--smooth-mode action --smooth 0`.
 
 손실·평가·하이퍼파라미터는 train_lane.py(기준선 minADE6 1.292) 와 같다.
 다른 것은 모델과 Dataset 이 주는 필드뿐이라, 지표 차이가 나면 레벨 때문이다.
@@ -31,7 +39,7 @@ from dataset_lane import Av2LaneRuleDataset
 from model_v4 import V4Net, N_PTS, N_RULE, A_SCALE, DTHETA_MAX
 
 LABEL_DTHETA_DEG = 7.3     # 실제 차량의 스텝간 방향 변화 p99.99 (라벨 전수조사). 넘으면 못 내는 요레이트다
-SMOOTH_L0_DEFAULT = 1.0    # L0 의 흔들림 벌점 기본 가중치 — L0·L4 둘 다 실험한 값 (0.1 과 최근 5에폭 평균이 같다)
+SMOOTH_L0_DEFAULT = 0.0    # 액션 벌점 기본 가중치. 2026-10-06 부터 기본 벌점은 좌표 기준(--smooth-mode xy)이라 0 이다
 DATA_ROOT = "/data/argoverse2/motion_forecasting"
 CACHE_ROOT = "/data/argoverse2/cache/v4"      # prepare_v4.py 가 캐시를 굽는 곳
 ROUTE_KEYS = ("routes", "route_tan", "route_band", "route_len", "route_sd0",
@@ -135,6 +143,47 @@ def jitter_xy(traj, mode_mask, thresh_deg=LABEL_DTHETA_DEG, v_min=1.0, dt=0.1):
     return (over ** 2 * m).sum() / m.sum().clamp(min=1)
 
 
+LANE_YAW_TOL_DEG = 15.0    # 정답 라벨 p95 (경로가 3 m 안인 경우) — src/lane_yaw_stats.py 측정
+LANE_YAW_D_MAX = 3.0       # |d| 가 이보다 크면 그 모드는 자기 경로 위에 있지 않다 — 접선각 비교가 무의미하다
+LANE_YAW_CLAMP = 2.0       # 허용 오차의 몇 배까지 셀지 — 180° 이상치가 gradient 를 독점하지 않게 막는다
+
+
+def lane_yaw_loss(traj, aux, mode_mask, tol_deg=LANE_YAW_TOL_DEG, d_max=LANE_YAW_D_MAX,
+                  v_min=1.0, dt=0.1, clamp=LANE_YAW_CLAMP):
+    """**예측 좌표**의 진행방향이 그 모드가 타는 경로의 접선각에서 벗어난 만큼을 힌지로 벌한다 (2026-10-06).
+
+    출처 — Greer et al., "Trajectory Prediction in Autonomous Driving with a Lane Heading Auxiliary Loss"
+    (arXiv:2011.06679) 의 YawLoss. 세 가지를 그대로 따른다: ① 연속한 **예측 좌표 두 점**의 arctan 으로
+    진행방향을 만들고 ② 허용 오차 안에서는 0 인 힌지로 벌하고 ③ 승자뿐 아니라 **모든 살아있는 모드**에 건다
+    (그 논문이 근거를 들어 주장하는 성질이다 — 버려지는 모드는 거리 손실의 감독을 못 받는다).
+
+    왜 넣나 — 24판 측정에서 모델의 |Δψ| 중앙값이 직진 0.06° → 회전 0.16° 로 2.7배밖에 안 커진다
+    (정답은 0.12° → 1.10°, 9배). jitter_xy 는 '급변 금지'만 걸 뿐 **어디로 돌아야 하는지**는 말하지 않는다.
+    경로 접선각은 회전에서 실제로 돌아가므로, 거기에 정렬시키면 회전 구조가 생긴다.
+    적분기 안에서는 h = k(s) + θ 라 정의상 정렬돼 있지만 **좌표에서 복원한 ψ 는 다르다** — 그 차이(기하 항)가
+    위반의 주항이었다(기여 75%, 2.14절). 이 손실은 그 항을 직접 겨냥한다.
+
+    허용 오차 15° 는 정답 라벨 분포에서 왔다 — 경로가 3 m 안일 때 |ψ_gt − k| 의 p95 다
+    (`src/lane_yaw_stats.py`: 전체 p50 1.11° / p90 10.41° / p95 21.37°). 실제 차선변경·코너 커팅을
+    벌하지 않으려면 이 정도가 필요하다.
+    """
+    d = traj[..., 1:, :] - traj[..., :-1, :]                      # (B,K,T-1,2)
+    sp = d.norm(dim=-1) / dt
+    psi = torch.atan2(d[..., 1], d[..., 0])
+    k = aux["k"]                                                  # (B,K,T) 경로 접선각
+    # 세그먼트의 접선각 = 양 끝 각의 원형 평균 (YawLoss 는 중점의 차선 heading 을 쓴다)
+    kc = torch.cos(k[..., 1:]) + torch.cos(k[..., :-1])
+    ks = torch.sin(k[..., 1:]) + torch.sin(k[..., :-1])
+    km = torch.atan2(ks, kc)
+    err = torch.remainder(psi - km + np.pi, 2 * np.pi) - np.pi
+    lim = float(np.radians(tol_deg))
+    over = ((err.abs() - lim).clamp(min=0) / lim).clamp(max=clamp)
+    on_route = (aux["d"][..., 1:].abs() <= d_max) & (aux["d"][..., :-1].abs() <= d_max)
+    ok = (sp[..., :] >= v_min) & on_route
+    m = mode_mask.unsqueeze(-1) * ok.float()
+    return (over ** 2 * m).sum() / m.sum().clamp(min=1)
+
+
 def jitter(aux, mode_mask):
     """흔들림 벌점 — 액션 (a, dθ) 의 이웃 스텝 차이 제곱 평균 (살아있는 모든 모드).
 
@@ -209,11 +258,15 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs")
-    ap.add_argument("--smooth-mode", dest="smooth_mode", default="action",
+    ap.add_argument("--smooth-mode", dest="smooth_mode", default="xy",
                     choices=["action", "xy", "both"],
-                    help="흔들림 벌점을 무엇에 걸지 — action=액션 차분(지금), xy=예측 좌표의 방향 변화 힌지")
+                    help="흔들림 벌점을 무엇에 걸지 — xy=예측 좌표의 방향 변화 힌지(기본, 2026-10-06), "
+                         "action=액션 (a, dθ) 차분(옛 기본), both=둘 다")
     ap.add_argument("--smooth-xy", dest="smooth_xy", type=float, default=1.0,
-                    help="좌표 기준 벌점 가중치")
+                    help="좌표 기준 벌점 가중치. 1.0 = 정확도 손해 없이 위반율 0.29배, 3.0 = 1.13%% (24판 측정)")
+    ap.add_argument("--lane-yaw", dest="lane_yaw", type=float, default=0.0,
+                    help="차선 heading 정렬 보조 손실 가중치 (YawLoss, arXiv:2011.06679) — 예측 좌표의 진행방향을 "
+                         "그 모드 경로의 접선각에 %g° 안으로 맞춘다. 0 이면 끈다" % LANE_YAW_TOL_DEG)
     ap.add_argument("--lat-modes", dest="lat_modes", type=float, default=0.0,
                     help="횡 모드 축 보조 손실 가중치 — 같은 경로의 둘째·셋째 슬롯을 ±차로폭으로 민다")
     ap.add_argument("--cleanse", type=int, default=0,
@@ -231,8 +284,8 @@ def main():
     ap.add_argument("--th0", default="current", choices=["current", "guard"],
                     help="적분기 시작 잔차각. guard=wrap(h0-k(s0)), |값|>90° 면 current")
     ap.add_argument("--smooth", type=float, default=None,
-                    help="흔들림 벌점 가중치 — 액션 (a, dθ) 의 스텝간 변화 제곱 (jitter). "
-                         "주지 않으면 level l0 은 1.0(L0 의 일부), 그 밖은 0. 0 이면 기존 손실 그대로")
+                    help="**액션** 흔들림 벌점 가중치 — (a, dθ) 의 스텝간 변화 제곱 (jitter). "
+                         "기본 0 이다(기본 벌점은 좌표 기준). --smooth-mode action|both 와 함께 줄 때만 쓴다")
     ap.add_argument("--tag", default="")
     ap.add_argument("--save-every", dest="save_every", type=int, default=1,
                     help="N 에폭마다 체크포인트를 <outdir>/ckpt/<tag>/epNN.pth 로 남긴다 — 에폭별 시각화"
@@ -246,7 +299,9 @@ def main():
 
     use_rules = bool(args.rules)
     tag = args.tag or f"v4_{args.level}" + (f"_off{args.offlane:g}" if args.offlane else "") \
-        + (f"_sm{args.smooth:g}" if args.smooth else "") \
+        + (f"_sm{args.smooth:g}" if args.smooth and args.smooth_mode in ("action", "both") else "") \
+        + (f"_smxy{args.smooth_xy:g}" if args.smooth_xy and args.smooth_mode in ("xy", "both") else "") \
+        + (f"_ly{args.lane_yaw:g}" if args.lane_yaw else "") \
         + (f"_{args.lr_sched}{args.epochs}" if args.lr_sched != "const" else "") + f"_s{args.seed}"
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -320,10 +375,13 @@ def main():
                 sm = jitter(aux, mm)
                 loss = loss + args.smooth * sm
                 rsm += float(sm.detach()) * y.size(0)
+            if args.lane_yaw > 0 and aux:
+                loss = loss + args.lane_yaw * lane_yaw_loss(traj, aux, mm)
             if args.lat_modes > 0 and aux:
                 loss = loss + args.lat_modes * lat_target_loss(aux, mm, b["route_sub"].to(device))
             if args.smooth_mode in ("xy", "both") and args.smooth_xy > 0:
-                # 좌표 기준 힌지 — 지금 벌점이 누르는 dθ 는 실제 궤적 방향 변화의 0.3% 만 설명한다(2026-09-29 측정)
+                # 기본 벌점 (2026-10-06). 액션이 아니라 **예측 좌표**에서 복원한 방향을 누른다 —
+                # 액션 벌점은 회전까지 눌러 회전 시나리오에서 +0.164 m 를 내준다(24판 측정, 2.16절).
                 loss = loss + args.smooth_xy * jitter_xy(traj, mm)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)

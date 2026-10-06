@@ -215,9 +215,9 @@ route_point 는 학습 중 경로 끝에서 끊기던 gradient 를 살리므로,
 
 ```bash
 python src/train_v4.py --level l0 --input raw5 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth 0 --tag v4_l0_raw5g_s0
+    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth-mode action --smooth 0 --tag v4_l0_raw5g_s0
 python src/train_v4.py --level l0 --input raw5 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
-    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4nw_raw5g_s0
+    --limit 50000 --val-limit 2000 --epochs 15 --lr 5e-4 --batch 32 --smooth-mode action --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4nw_raw5g_s0
 ```
 
 캐시를 쓰려면 같은 인자로 `src/prepare_v4.py` 를 먼저 돌리고 학습 명령에 `--cache` 를 붙인다.
@@ -272,11 +272,13 @@ flowchart LR
 | 승자 모드도 포함 | 승자도 진동했다 (승자를 빼는 L4 hinge 와 다른 점) |
 | 이웃 차이의 제곱 | 완만한 변화는 거의 공짜이고, 뒤집기는 크게 벌한다 |
 
-`--smooth 0` 이면 기존 코드와 loss·minADE6 가 소수 6자리까지 같다(검증) — 이전 결과는 그대로 재현된다.
+`--smooth-mode action --smooth 0` 이면 기존 코드와 loss·minADE6 가 소수 6자리까지 같다(검증) — 이전 결과는 그대로 재현된다.
 
 > **결정 (2026-09-16) — 흔들림 벌점은 L0 의 일부다.** 흔들림은 액션 출력이 만드는 문제라
-> **L0 = 액션 출력 + Frenet 적분기 + 흔들림 벌점**으로 정의한다. 그래서 `--level l0` 이면 `--smooth` 기본값이 1.0 이다
-> (L4 는 그 위에 이탈 hinge). 벌점 없이 학습한 예전 판을 재현하려면 `--smooth 0` 을 준다 — 9절 명령과 `run_v4*.sh` 에 넣어 두었다.
+> **L0 = 액션 출력 + Frenet 적분기 + 흔들림 벌점**으로 정의한다 (L4 는 그 위에 이탈 hinge).
+> **2026-10-06 부터 기본 벌점은 좌표 기준이다** — `--smooth-mode xy --smooth-xy 1.0` 이 기본값이고 `--smooth`(액션) 기본값은 0 이다.
+> 근거는 2.16절. 예전 판을 재현하려면 모드를 명시한다 — 액션 벌점판은 `--smooth-mode action --smooth 1.0`,
+> 벌점 없는 판은 `--smooth-mode action --smooth 0`. 9절 명령과 `run_v4*.sh` 에 넣어 두었다.
 
 **④ 결과** — val 24,988 · best 에폭 / 최근 5에폭 평균 · 시드 1개
 
@@ -1164,6 +1166,61 @@ pos0 = np.load(f"{A}/pos0.npy", mmap_mode="r")   # (N, 32, 2) t=0 위치
 
 ---
 
+### 2.17 기본 벌점을 좌표로 바꿨다 + 차선 heading 정렬 손실 (2026-10-06)
+
+> **한 줄** — 2.16 결과에 따라 **기본 벌점을 좌표 기준 1.0 으로 바꿨다.** 그리고 회전 구조가 안 생기는 문제에
+> 더 직접적인 처방으로 **차선 heading 정렬 손실**(YawLoss)을 넣어 6판을 돌리고 있다.
+
+**바뀐 기본값** (`src/train_v4.py`)
+
+| | 전 | 후 |
+| --- | --- | --- |
+| `--smooth-mode` | `action` | **`xy`** |
+| `--smooth` (액션 가중치) | l0 이면 1.0 | **0** |
+| `--smooth-xy` | 1.0 | 1.0 (그대로) |
+
+- 태그에 `_smxy1` 이 붙어 어떤 벌점으로 돈 판인지 이름만 봐도 갈린다.
+- 예전 판 재현은 **모드를 명시**한다 — `run_v4*.sh` 와 9절 명령에 `--smooth-mode action` 을 넣어 두었다.
+  손실·지표가 바뀌지 않는지 256개 스모크로 확인했다(액션 1.0 판의 태그·손실이 전과 같다).
+
+**차선 heading 정렬 손실 (`--lane-yaw w`)**
+
+Greer et al., *Trajectory Prediction in Autonomous Driving with a Lane Heading Auxiliary Loss*
+(arXiv:2011.06679) 의 YawLoss 를 그대로 따른다 — ① 연속한 **예측 좌표 두 점**의 arctan 으로 진행방향을 만들고
+② 허용 오차 안에서는 0 인 힌지로 벌하고 ③ 승자뿐 아니라 **모든 살아있는 모드**에 건다.
+차이는 target 이다 — 우리는 그 모드가 타는 **후보 경로의 접선각**을 쓴다(그 논문은 가장 가까운 차선).
+
+**왜 이게 필요한가** — `jitter_xy` 는 "급변 금지"만 걸 뿐 **어디로 돌아야 하는지**는 말하지 않는다.
+2.16 에서 모델의 |Δψ| 중앙값이 직진 0.06° → 회전 0.16° 로 2.7배밖에 안 커졌다(정답은 9배). 경로 접선각은
+회전에서 실제로 돌아가므로 거기에 정렬시키면 회전 구조가 생긴다. 적분기 안에서는 h = k(s) + θ 라 정의상
+정렬돼 있지만 **좌표에서 복원한 ψ 는 다르고**, 그 차이(기하 항)가 위반의 주항이었다(기여 75%, 2.14절).
+
+**허용 오차는 정답 분포에서 정했다** (`src/lane_yaw_stats.py`, val 24,988 · 1,279,997 스텝)
+
+| 구간 | p50 | p90 | p95 | p99 |
+| --- | --- | --- | --- | --- |
+| 전체 | 1.11° | 10.41° | 21.37° | 90.39° |
+| 직진 <5° | 0.70° | 3.44° | 6.10° | 63.48° |
+| 완만 5–30° | 2.27° | 17.13° | 60.30° | 113.50° |
+| 회전 ≥30° | 4.96° | 24.52° | 46.39° | 126.09° |
+| 경로가 3 m 안인 경우만 | — | 8.50° | **15.07°** | 65.66° |
+
+- **정답조차 꼬리가 두껍다** — p99 가 90°다. 경로가 정답에서 멀거나(5.3% 가 평균 3 m 초과), 교차로에서
+  가장 가까운 정점이 경로의 되돌아오는 구간에 붙는 경우다. 그대로 두면 이상치가 gradient 를 독점한다.
+- 그래서 **허용 오차 15°**(경로 3 m 안일 때의 p95), **|d| ≤ 3 m 게이트**, **힌지 비율 2배 클램프**를 함께 건다.
+  7.3°/step 임계(정답 초과 0.35%)와 달리 여기서는 **정답도 5% 가 넘는다** — 느슨하게 잡아야 실제 코너 커팅과
+  차선변경을 벌하지 않는다.
+- 단위 검사 통과: 정렬 0, 10°·15° 0, 30° 1.0, 45°·180° 4.0(클램프), 경로 밖 0, 정지 0, 곡선로 추종 0.
+
+**돌리는 판** — 기준은 이미 있는 좌표 벌점 1.0 3판이고, 그 위에 `--lane-yaw 1.0` 과 `3.0` 을 각각 3시드.
+학습된 체크포인트에서 이 항의 값은 0.053 이라 가중치 1.0 이면 주 손실(2.11)의 2.5% 다 — `jitter_xy` 항(0.023)과 같은 자릿수로 잡았다.
+
+**미리 적어 두는 위험** — 이 손실은 차선변경을 **반대 방향으로** 벌할 수 있다. 차선변경 중에는 진행방향이
+차선 접선에서 벗어나는 것이 정상이고, 정답 분포의 두꺼운 꼬리가 바로 그런 경우를 포함한다. 그래서 전체
+minADE6 뿐 아니라 **차선변경 627건 전용 평가군**에서 같이 봐야 한다.
+
+---
+
 ## 3. 전처리 — 후보 경로 열거기
 
 `k` 는 기준 경로의 접선각에서 나온다. **경로가 틀리면 θ 라벨이 통째로 오염된다.**
@@ -1454,9 +1511,9 @@ python src/simulate_v4_lane.py --limit 300             # 경로 열거기 효과
 # --fallback 기본값은 straight1 이다 (b1db1a6 에서 되돌림). 아래 명령은 단계 1~4 수치를 재현한다.
 python src/train_v4.py --level l2 --theta 0 --tag v4_l2_s0
 python src/train_v4.py --level l3 --theta 0 --tag v4_l3b_s0
-# L0 기본에 흔들림 벌점(1.0)이 들어간 뒤(2026-09-16)로는 벌점 없는 판 재현에 --smooth 0 이 필요하다
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 --tag v4_l0b_s0
-python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4_nw_s0
+# L0 기본에 흔들림 벌점(1.0)이 들어간 뒤(2026-09-16)로는 벌점 없는 판 재현에 --smooth-mode action --smooth 0 이 필요하다
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth-mode action --smooth 0 --tag v4_l0b_s0
+python src/train_v4.py --level l0 --theta 0 --fallback straight1 --smooth-mode action --smooth 0 --offlane 1.0 --off-nonwinner 1 --tag v4_l4_nw_s0
 
 # (a, h) 2채널 입력 판 — L0·L4, θ₀ 가드 (사용자 결정으로 이 두 판만)
 bash run_v4_ah2.sh

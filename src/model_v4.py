@@ -181,7 +181,7 @@ class V4Net(nn.Module):
         traj = P + N * d.unsqueeze(-1)
         k_ang = torch.atan2(Tg[..., 1], Tg[..., 0])
         return traj, {"a": a, "theta": th, "dtheta": dth, "v": v, "s": s, "d": d,
-                      "idx": idx, "h": k_ang + th}
+                      "idx": idx, "h": k_ang + th, "k": k_ang}
 
     # ------------------------------------------------------------------
     def forward(self, x, lanes, lane_mask, lane_feat=None, routes=None,

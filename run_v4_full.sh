@@ -20,9 +20,9 @@ grep -q "모든 점검 통과" /data/argoverse2/cache/v4/prepare_l0_ah2_full.log
 C="--level l0 --input ah2 --th0 guard --fallback straight1 --theta 0 --rules 1 --seed 0 \
    --limit 199908 --val-limit 24988 --epochs 15 --lr 5e-4 --batch 32 --workers 8 --cache --outdir runs"
 L4="--offlane 1.0 --off-nonwinner 1"
-$PY -u src/train_v4.py $C     --smooth 0    --tag v4_l0_ah2_full_s0          > runs/v4_l0_ah2_full_s0.log          2>&1
-$PY -u src/train_v4.py $C $L4 --smooth 0    --tag v4_l4nw_ah2_full_s0        > runs/v4_l4nw_ah2_full_s0.log        2>&1
-$PY -u src/train_v4.py $C     --smooth 1.0  --tag v4_l0_ah2_full_sm1_s0      > runs/v4_l0_ah2_full_sm1_s0.log      2>&1
-$PY -u src/train_v4.py $C $L4 --smooth 1.0  --tag v4_l4nw_ah2_full_sm1_s0    > runs/v4_l4nw_ah2_full_sm1_s0.log    2>&1
-$PY -u src/train_v4.py $C     --smooth 0.1  --tag v4_l0_ah2_full_sm0.1_s0    > runs/v4_l0_ah2_full_sm0.1_s0.log    2>&1
+$PY -u src/train_v4.py $C     --smooth-mode action --smooth 0    --tag v4_l0_ah2_full_s0          > runs/v4_l0_ah2_full_s0.log          2>&1
+$PY -u src/train_v4.py $C $L4 --smooth-mode action --smooth 0    --tag v4_l4nw_ah2_full_s0        > runs/v4_l4nw_ah2_full_s0.log        2>&1
+$PY -u src/train_v4.py $C     --smooth-mode action --smooth 1.0  --tag v4_l0_ah2_full_sm1_s0      > runs/v4_l0_ah2_full_sm1_s0.log      2>&1
+$PY -u src/train_v4.py $C $L4 --smooth-mode action --smooth 1.0  --tag v4_l4nw_ah2_full_sm1_s0    > runs/v4_l4nw_ah2_full_sm1_s0.log    2>&1
+$PY -u src/train_v4.py $C     --smooth-mode action --smooth 0.1  --tag v4_l0_ah2_full_sm0.1_s0    > runs/v4_l0_ah2_full_sm0.1_s0.log    2>&1
 echo "=== DONE ==="; grep -h BEST runs/v4_*_full*_s0.log

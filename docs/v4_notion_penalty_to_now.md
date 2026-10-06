@@ -14,7 +14,8 @@
 1. **필요함** — penalty 없이 학습하면 top-1 trajectory step의 **8.47%**가 label 상한(7.3°/step)을 넘음. ground truth label은 0.35%임(24배)
 2. **target을 model output(action)에서 predicted coordinate로 교체하는 것이 우월함** — coordinate penalty 1.0은 accuracy cost가 검출되지 않으면서(paired ΔminADE6 **+0.000 m**) violation을 **0.29배**로 낮춤
 3. **현재 action penalty는 violation rate만 낮추고 turn 구조를 flatten시킴** — turn scenario의 |Δψ| median이 0.16°/step으로 ground truth(1.10°)의 1/7임. accuracy cost도 turn에 집중됨(+0.164 m)
-4. **권고** — accuracy 우선이면 coordinate penalty 1.0, kinematic realism 우선이면 coordinate penalty 3.0임. 현재 설정(action penalty 1.0)은 둘 중 어느 기준으로도 최적이 아님
+4. **coordinate penalty 1.0을 기본 설정으로 전환했음**(2026-10-06) — `train_v4.py`의 `--smooth-mode` 기본값을 `xy`로, action penalty 기본 가중치를 0으로 변경했음. 기존 판 재현은 `--smooth-mode action`을 명시함
+5. kinematic realism이 우선 기준이면 coordinate penalty 3.0이 대안임 — minADE6는 현행과 동일하고(1.442 vs 1.440) turn의 heading 변화 분포 재현이 훨씬 나음(0.90° vs 0.16°, ground truth 1.10°)
 
 ### 1.2 측정 설계
 
@@ -318,9 +319,18 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 
 ### 다음 단계
 
-1. coordinate penalty 1.0을 **기본 설정으로 전환**함 — 이후 모든 비교의 baseline을 교체함
-2. neighbor·lateral mode를 **lane change 309건 전용 평가군**에서 재측정함
-3. turn 구간의 |Δψ| 분포를 ground truth에 맞추는 penalty 형태를 검토함 — 현재는 1.0이 과소, 3.0이 과대 억제임
+1. coordinate penalty 1.0을 **기본 설정으로 전환 완료**(2026-10-06) — 이후 모든 비교의 baseline을 교체했음
+2. **lane heading alignment loss 학습 중**(6판) — 아래 참조
+3. neighbor·lateral mode를 **lane change 309건 전용 평가군**에서 재측정해야 함
+
+### lane heading alignment loss (진행 중)
+
+1. 근거 — Greer et al., *Lane Heading Auxiliary Loss*(arXiv:2011.06679)의 YawLoss임. ① predicted coordinate 2점의 arctan으로 heading 생성 ② tolerance 내 0인 hinge ③ 모든 live mode에 적용 — 세 요소를 그대로 따랐고, target만 "그 mode가 주행하는 candidate route의 tangent angle"로 바꿨음
+2. 도입 이유 — `jitter_xy`는 급변만 억제하고 **회전 방향을 지시하지 않음**. route tangent는 turn에서 실제로 회전하므로 정렬시키면 turn 구조가 생성됨. 또한 coordinate heading과 integrator heading의 차이(geometry term)가 violation의 주항이었으므로(기여 75%) 이를 직접 겨냥함
+3. tolerance는 ground truth 분포에서 결정했음 — |ψ_gt − lane tangent|의 p95(route가 3 m 이내인 경우) = **15.07°**. 전체 p50 1.11° / p90 10.41° / p99 90.39°
+4. **ground truth 자체의 tail이 두꺼움**(p99 90°)이 확인됨 — route가 ground truth에서 멀거나(5.3%) 교차로에서 nearest vertex가 route의 역방향 구간에 붙는 경우임. 따라서 |d| ≤ 3 m gate와 hinge ratio 2배 clamp를 함께 적용했음
+5. 실험 — baseline(coordinate penalty 1.0, 3 seeds 완료) 위에 weight 1.0과 3.0 각 3 seeds, 총 6판
+6. **사전 기록한 위험** — lane change 중에는 heading이 lane tangent에서 벗어나는 것이 정상이므로 이 loss가 lane change를 역방향으로 억제할 수 있음. 전체 minADE6와 함께 **lane change 627건 전용 평가군**에서 판정해야 함
 
 ### 실행 환경 메모
 
