@@ -315,8 +315,12 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
 
     lim = None if args.limit == 0 else args.limit
+    # **prepare_v4.dataset_kwargs() 와 글자 그대로 같아야 한다.** 캐시 키는 이 dict 의 JSON 이라
+    # 한쪽에만 키가 늘면 (값이 기본값이어도) 해시가 달라져 모든 --cache 판이 '캐시 없음' 으로 죽는다.
+    # 2026-10-06 에 route_hist·lane_smooth 를 prepare_v4 에만 넣어 실제로 그렇게 됐다.
     dkw = dict(with_rules=use_rules, theta_ch=bool(args.theta), h_src=args.h_src,
-               routes=args.level != "l2", fallback=args.fallback, input_repr=args.input, cleanse=args.cleanse)
+               routes=args.level != "l2", fallback=args.fallback, input_repr=args.input,
+               cleanse=args.cleanse, route_hist=args.route_hist, lane_smooth=args.lane_smooth)
     if args.cache:
         # prepare_v4.py 와 같은 규칙(전처리 설정 + 소스 해시)으로 캐시를 찾는다. 소스를 고쳤으면 키가
         # 달라져 못 찾으므로, 낡은 캐시로 학습하는 일은 구조적으로 막힌다.
