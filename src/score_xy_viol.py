@@ -16,6 +16,8 @@ psi = atan2(dy, dx) 에는 경로 곡률 k(s) 와 프레네 기하 항이 더 �
   p99_dpsi_deg     |dpsi| 99 분위 [°]
   theta_over_pct   기존(잔차각) 지표 — 로그 값과 맞는지 대조용
   minADE6/minFDE6  재채점 (로그 best 와 대조)
+시나리오별 값도 `runs/v4_xy_viol_per.npz` 에 남긴다 — 차선변경 627건처럼 **임의의 부분집합**을
+나중에 따로 집계하려면 전체 평균만으로는 못 하기 때문이다(`src/score_subset.py`).
 또 **정답의 총 회전량으로 시나리오를 나눠** 같은 값을 따로 낸다. penalty 가 잡음만 누르는지
 실제 회전까지 누르는지는 이 분해로만 갈린다 (직진에서만 위반이 줄고 회전에서 ADE 가 나빠지면
 실제 회전을 누른 것이다).
@@ -129,6 +131,7 @@ def score(tag, batch=32, workers=4, limit=None):
                                         radius_m=a.get("agents_radius", 30.0),
                                         step=a.get("agents_step", 5)))
     al, t1, gt = Acc(), Acc(), Acc()
+    per = {"ade": [], "fde": [], "exc": [], "steps": [], "turn": []}   # 시나리오별 (부분집합 집계용)
     by = {lab: {"t1": Acc(), "gt": Acc(), "ade": 0.0, "n": 0.0} for *_, lab in TURN_BINS}
     ade = fde = n = 0.0
     exc_th = live_th = 0.0
@@ -155,9 +158,16 @@ def score(tag, batch=32, workers=4, limit=None):
         t1.add(dp[ar, top], ok[ar, top])
         dpg, okg = dpsi_deg(y)                        # (B,T-2)
         gt.add(dpg, okg)
-        # ---- 정답 회전량별 분해
+        # ---- 시나리오별 값 (top-1 기준 위반 step 수와 유효 step 수)
         tn = gt_turn_deg(y)
         a1 = torch.where(lv, dist.mean(2), big).min(1).values
+        f1 = torch.where(lv, dist[:, :, -1], big).min(1).values
+        dp1, ok1 = dp[ar, top], ok[ar, top]
+        per["ade"].append(a1.cpu().numpy())
+        per["fde"].append(f1.cpu().numpy())
+        per["exc"].append((((dp1 > LABEL_DTHETA_DEG).float() * ok1).sum(-1)).cpu().numpy())
+        per["steps"].append(ok1.sum(-1).cpu().numpy())
+        per["turn"].append(tn.cpu().numpy())
         for lo, hi, lab in TURN_BINS:
             sel = (tn >= lo) & (tn < hi)
             if not bool(sel.any()):
@@ -166,7 +176,8 @@ def score(tag, batch=32, workers=4, limit=None):
             by[lab]["gt"].add(dpg[sel], okg[sel])
             by[lab]["ade"] += a1[sel].sum().item()
             by[lab]["n"] += int(sel.sum())
-    return {"tag": tag, "n": int(n), "minADE6": ade / n, "minFDE6": fde / n,
+    per = {k: np.concatenate(v) for k, v in per.items()}
+    return per, {"tag": tag, "n": int(n), "minADE6": ade / n, "minFDE6": fde / n,
             "logged_best_minADE6": j["best_minADE6"],
             "theta_over_pct": 100.0 * exc_th / max(live_th, 1.0),
             "xy_alive": al.out(), "xy_top1": t1.out(), "gt": gt.out(),
@@ -195,7 +206,7 @@ def main():
     for t in tags:
         t0 = time.time()
         try:
-            r = score(t, args.batch, args.workers, args.limit)
+            per, r = score(t, args.batch, args.workers, args.limit)
         except Exception as e:                       # 한 판이 깨져도 나머지는 재운다
             print(f"[{t}] 실패: {type(e).__name__}: {e}", flush=True)
             continue
@@ -206,6 +217,10 @@ def main():
               f"(정답 {r['gt']['over_pct']:.3f}%)", flush=True)
         if args.limit is None:
             out.write_text(json.dumps(res, indent=1, ensure_ascii=False))
+            pf = out.with_name(out.stem + "_per.npz")
+            keep = dict(np.load(pf)) if pf.exists() else {}
+            keep.update({f"{t}|{k}": v for k, v in per.items()})
+            np.savez_compressed(pf, **keep)
     print("저장", out if args.limit is None else "(스모크 — 저장 안 함)")
 
 
