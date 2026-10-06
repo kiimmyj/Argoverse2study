@@ -323,14 +323,46 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 2. **lane heading alignment loss 학습 중**(6판) — 아래 참조
 3. neighbor·lateral mode를 **lane change 309건 전용 평가군**에서 재측정해야 함
 
-### lane heading alignment loss (진행 중)
+### lane heading alignment loss — 결과
 
 1. 근거 — Greer et al., *Lane Heading Auxiliary Loss*(arXiv:2011.06679)의 YawLoss임. ① predicted coordinate 2점의 arctan으로 heading 생성 ② tolerance 내 0인 hinge ③ 모든 live mode에 적용 — 세 요소를 그대로 따랐고, target만 "그 mode가 주행하는 candidate route의 tangent angle"로 바꿨음
 2. 도입 이유 — `jitter_xy`는 급변만 억제하고 **회전 방향을 지시하지 않음**. route tangent는 turn에서 실제로 회전하므로 정렬시키면 turn 구조가 생성됨. 또한 coordinate heading과 integrator heading의 차이(geometry term)가 violation의 주항이었으므로(기여 75%) 이를 직접 겨냥함
 3. tolerance는 ground truth 분포에서 결정했음 — |ψ_gt − lane tangent|의 p95(route가 3 m 이내인 경우) = **15.07°**. 전체 p50 1.11° / p90 10.41° / p99 90.39°
 4. **ground truth 자체의 tail이 두꺼움**(p99 90°)이 확인됨 — route가 ground truth에서 멀거나(5.3%) 교차로에서 nearest vertex가 route의 역방향 구간에 붙는 경우임. 따라서 |d| ≤ 3 m gate와 hinge ratio 2배 clamp를 함께 적용했음
-5. 실험 — baseline(coordinate penalty 1.0, 3 seeds 완료) 위에 weight 1.0과 3.0 각 3 seeds, 총 6판
-6. **사전 기록한 위험** — lane change 중에는 heading이 lane tangent에서 벗어나는 것이 정상이므로 이 loss가 lane change를 역방향으로 억제할 수 있음. 전체 minADE6와 함께 **lane change 627건 전용 평가군**에서 판정해야 함
+5. **weight 1.0 결과 — 지금까지 중 가장 저렴한 trade-off임**
+
+| condition | minADE6 | seed range | coordinate violation | paired Δ vs no penalty |
+| --- | --- | --- | --- | --- |
+| no penalty | 1.359 | 0.035 | 8.47% | — |
+| coordinate penalty 1.0 | 1.359 | 0.006 | 2.28% | +0.000 (불일치) |
+| **+ lane-yaw 1.0** | **1.372** | **0.005** | **1.33%** | **+0.013 (불일치)** |
+| coordinate penalty 3.0 | 1.442 | 0.137 | 1.13% | +0.083 (일치) |
+| action penalty 1.0 | 1.440 | 0.105 | 0.76% | +0.081 (일치) |
+
+6. violation을 2.28% → 1.33%로 낮추는 cost가 **0.013 m**임. 같은 폭을 penalty weight로 사면(2.28% → 1.13%) **0.083 m**로 **6배 비쌈** — penalty를 강화하는 것보다 **방향을 지시하는 쪽이 효율적임**
+7. turn 구간의 |Δψ| median이 **1.46°로 ground truth(1.10°)에 가장 근접함**(action penalty 0.16°, coordinate 3.0 0.89°). 단 직진 구간은 0.93°로 ground truth(0.12°)보다 8배 큼 — tolerance 15° 내부의 미세 진동은 설계상 건드리지 않기 때문임
+8. **사전 기록한 위험(lane change 역방향 억제)은 실현되지 않았음** — 전용 평가군에서 오히려 개선 방향이었음
+
+| 평가군 | coordinate 1.0 | + lane-yaw 1.0 | paired Δ | violation |
+| --- | --- | --- | --- | --- |
+| 전체 (24,988) | 1.359 | 1.372 | +0.013 (일치) | 2.28% → **1.33%** |
+| D2 lane change (627) | 2.001 | 1.985 | −0.016 (불일치) | 2.27% → **0.89%** |
+| prediction window 내 신규 (1,083) | 1.581 | 1.576 | −0.005 (불일치) | 1.41% → **0.52%** |
+| U-turn (73) | 2.657 | 2.684 | +0.027 (불일치) | 2.24% → 2.04% |
+
+9. weight 3.0은 재실행 중임 — 다른 session이 학습 중 `src/dataset_lane.py`를 수정해 cache key가 변경되면서 batch 전체가 즉시 실패했음. 해당 변경은 default off라 출력이 동일함을 bit-exact로 확인하고 cache re-keying으로 복구했음
+
+### neighborhood vehicles / lateral mode axis — 전용 평가군 재측정
+
+1. 두 변경 모두 **lane change 전용 평가군에서도 효과가 검출되지 않음**(부호 불일치)
+
+| 변경 | 전체 | D2 lane change (627) | prediction window 내 신규 (1,083) |
+| --- | --- | --- | --- |
+| neighborhood vehicles 30 m | +0.053 (일치) | −0.041 (불일치) | +0.015 (불일치) |
+| lateral mode axis | +0.067 (일치) | −0.010 (불일치) | +0.041 (불일치) |
+
+2. 단 **비교 기준이 바뀌었음** — 두 변경은 action penalty 위에서 학습했는데 현재 baseline은 coordinate penalty임. 전체 지표에서 나빠 보이는 것은 baseline이 개선된 결과임
+3. 판정하려면 **동일 penalty 위에서 재학습**해야 함
 
 ### 실행 환경 메모
 

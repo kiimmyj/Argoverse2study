@@ -28,6 +28,8 @@ CONDS = [   # (이름, 태그틀, 색, 표식, (a) 칸 글자 자리)
     ("no penalty",         "v4_l4nw_ah2_full_sm0_cos30_s%d",   C.MUTED,    "o", (-9, -14, "right")),
     ("coord penalty 1.0",  "v4_l4nw_ah2_full_smxy1_cos30_s%d", C.C_BLUE,   "s", (0, -17, "center")),
     ("coord penalty 3.0",  "v4_l4nw_ah2_full_smxy3_cos30_s%d", "#184f95",  "D", (11, 3, "left")),
+    ("+ lane-yaw 1.0",     "v4_l4nw_ah2_full_smxy1_ly1_cos30_s%d", C.C_GREEN, "P", (0, -17, "center")),
+    ("+ lane-yaw 3.0",     "v4_l4nw_ah2_full_smxy1_ly3_cos30_s%d", C.C_AQUA, "X", (-10, 7, "right")),
     ("action penalty 1.0", "v4_l4nw_ah2_full_sm1_cos30_s%d",   C.C_ORANGE, "^", (-10, -3, "right")),
     ("action+coord",       "v4_l4nw_ah2_full_smboth_cos30_s%d", C.C_RED,   "v", (11, 1, "left")),
 ]
@@ -52,6 +54,8 @@ def main():
             transform=ax.get_xaxis_transform(), va="top", ha="left")
     for name, pat, col, mk, (dx, dy, ha) in CONDS:
         rs = seeds(R, pat)
+        if not rs:
+            continue
         x = [r["xy_top1"]["over_pct"] for r in rs]
         y = [r["minADE6"] for r in rs]
         ax.scatter(x, y, s=16, color=col, alpha=0.45, marker=mk, lw=0, zorder=2)
@@ -73,6 +77,8 @@ def main():
             ms=11, label="정답 라벨", zorder=4)
     for name, pat, col, mk, _ in CONDS:
         rs = seeds(R, pat)
+        if not rs:
+            continue
         ys = [st.mean(r["by_turn"][b]["xy_top1"]["p50_deg"] for r in rs) for b in BINS]
         ax.plot(xs, ys, color=col, marker=mk, ms=6, lw=1.8, label=name)
     ax.set_yscale("log")
@@ -80,21 +86,20 @@ def main():
     ax.set_xlabel("정답의 총 진행방향 변화량으로 나눈 구간")
     ax.set_ylabel("top-1 |Δψ| 중앙값 [°/step]")
     ax.set_title("(b) 회전 구조를 재현하나 — 정답은 9배 커진다", loc="left")
-    ax.legend(loc="upper left", ncol=2, fontsize=7.6)
+    ax.legend(loc="upper left", ncol=2, fontsize=7.0)
 
     # ---------------- (c) 구간별 ADE 차이
     ax = axes[2]
-    w = 0.17
-    for j, (name, pat, col, mk, _) in enumerate(CONDS):
-        if pat == BASE:
-            continue
+    others = [c for c in CONDS if c[1] != BASE and (c[1] % 0) in R]
+    w = 0.78 / max(len(others), 1)
+    for j, (name, pat, col, mk, _) in enumerate(others):
         ys = [st.mean(R[pat % s]["by_turn"][b]["minADE6"] - R[BASE % s]["by_turn"][b]["minADE6"]
                       for s in (0, 1, 2)) for b in BINS]
-        off = (j - 2.0) * w
+        off = (j - (len(others) - 1) / 2.0) * w
         ax.bar([x + off for x in xs], ys, width=w, color=col, label=name, zorder=2)
         for x, y in zip(xs, ys):
             ax.text(x + off, y + 0.004, f"{y:+.3f}", ha="center", va="bottom",
-                    fontsize=6.6, color=col, rotation=90)
+                    fontsize=6.0, color=col, rotation=90)
     ax.axhline(0, color=C.AXIS, lw=1.0)
     ax.set_xticks(list(xs)); ax.set_xticklabels(BINS)
     ax.set_ylim(-0.03, 0.25)
@@ -113,6 +118,8 @@ def main():
     rows = []
     for name, pat, _, _, _ in CONDS:
         rs = seeds(R, pat)
+        if not rs:
+            continue
         rows.append({
             "name": name, "seeds": len(rs),
             "minADE6": st.mean(r["minADE6"] for r in rs),
