@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dataset_cached import CachedV4Dataset          # noqa: E402
-from model_v4 import V4Net                          # noqa: E402
+from model_v4 import V4Net, N_RPTS                  # noqa: E402
 from train_v4 import to_dev                         # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -119,8 +119,13 @@ def score(tag, batch=32, workers=4, limit=None):
     sd = torch.load(cpath, map_location="cpu")
     in_dim = sd["traj_encoder.weight_ih_l0"].shape[1]
     ag_in = sd["agent_encoder.0.weight"].shape[1] if "agent_encoder.0.weight" in sd else 0
+    # route_hist 를 쓴 판은 route encoder 입력이 늘어 있다 — 체크포인트에서 역산한다.
+    # (args 를 믿지 않는 이유: 옛 판의 args 에는 route_hist 키가 아예 없다)
+    rh_in = 0
+    if "route_encoder.0.weight" in sd:
+        rh_in = max(0, sd["route_encoder.0.weight"].shape[1] - (N_RPTS * 6 + 1))
     m = V4Net(in_dim=in_dim, lane_in=30, level="l0",
-              th0_mode=a.get("th0", "current"), agents_in=ag_in).cuda()
+              th0_mode=a.get("th0", "current"), agents_in=ag_in, route_hist_in=rh_in).cuda()
     m.load_state_dict(sd)
     m.eval()
 
