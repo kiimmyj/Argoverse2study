@@ -63,18 +63,17 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 | no penalty | 2.86 | 3.34 | 4.68 |
 
 1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 비용이 직진 +0.055 대비 turn **+0.164 m**로 3배임
-2. **"실제 회전을 억제한다"는 서술은 과장이었음(2026-10-07 정정)** — 두 session이 서로 다른 모집단으로 총 회전량을 측정했고, 합치면 다음과 같음
+2. **"실제 회전을 억제한다"는 서술은 과장이었음(2026-10-07 정정)** — 총 회전량을 직접 측정했음. 모집단은 **top-1 mode · ground truth 회전량 ≥30° 전체 4,021건**, 순 회전량은 움직이는 step의 Δψ를 부호 그대로 합한 절댓값임
 
-| 측정 | 모집단 | ground truth | no penalty | action 1.0 | coordinate 1.0 |
-| --- | --- | --- | --- | --- | --- |
-| 조건부 | winner mode · 3판 모두 정답 route 선택 (2,062건) | 63.8° | 56.7° | **56.5°** | 52.5° |
-| 무조건 | top-1 mode · turn 구간 전체 (4,021건) | 65.6° | 45.4° | **40.5°** | 42.7° |
+| | ground truth | no penalty | action 1.0 | coordinate 1.0 |
+| --- | --- | --- | --- | --- |
+| 순 회전량 | 65.6° | 45.4° | **40.5°** | 42.7° |
+| 왕복 포함 총 변화량 | 85.2° | 240.4° | **51.4°** | 161.8° |
 
-3. **조건부 기준으로는 penalty 효과가 거의 없음**(56.7 vs 56.5) — route를 올바로 선택하고 best mode를 쓰면 penalty를 걸어도 충분히 회전함
-4. 두 측정의 차이 약 16°는 **route 선택과 top-1 mode 선택**에서 발생함 — 회전 능력이 아니라 **mode selection 문제**이며, lane change의 top-1 적중률 문제와 동일한 원인임
-5. 어느 기준으로도 **3판 모두 ground truth보다 적게 회전함**(조건부 7~11°, 무조건 20~25°) — **penalty와 무관한 공통 결함**임
-6. penalty가 바꾸는 것은 회전의 **분포 모양**임 — 왕복 포함 총 heading 변화량이 action penalty 0.60배 / coordinate 1.0 1.90배 / no penalty 2.82배(ground truth 대비)임
-7. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
+3. **3판 모두 ground truth보다 20° 넘게 적게 회전함** — penalty 없이 학습해도 45.4°이므로 under-turn은 **penalty와 무관한 공통 결함**임. penalty가 더하는 몫은 부족분 25° 중 약 5°임
+4. penalty가 바꾸는 것은 회전의 **분포 모양**임 — action penalty는 왕복 포함 총 변화량이 ground truth의 **0.60배**로 과하게 매끄럽고, coordinate penalty는 **1.90배**, no penalty는 **2.82배**로 왕복이 남음
+5. **미해결 — action penalty 행에 두 구현의 차이가 있음**: 검토 session의 독립 구현은 44.0° / 54.9°로 본 측정(40.5° / 51.4°)과 어긋남. no penalty·coordinate 행은 소수점까지 일치함. 입력은 동일함을 확인했음(덤프 궤적이 재추론과 bit-identical, top-1 100% 일치, minADE6가 로그와 소수 4자리 일치). 속력 gate 출처·heading source 등 5가지 정의 변형을 시도했으나 재현되지 않았음. **다만 어느 값이든 결론은 같음**(둘 다 ground truth 65.6°에 크게 못 미치고 no penalty 45.4°에 가까움)
+6. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
 3. coordinate penalty 3.0이 **turn의 heading 변화 분포를 가장 잘 재현함**(0.90° vs ground truth 1.10°) — minADE6는 action penalty와 동일함(1.442 vs 1.440)
 4. coordinate penalty 1.0은 반대로 모든 구간에서 ground truth보다 과하게 움직임(1.63~2.12°) — violation 2.28%의 내용임
 5. **violation rate 단일 지표로는 action penalty가 1위지만, ground truth 분포 재현으로 보면 coordinate penalty 3.0이 1위임** — 두 기준이 갈리므로 목적에 따라 선택해야 함
