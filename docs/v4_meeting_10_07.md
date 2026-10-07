@@ -1,5 +1,8 @@
-# 10/7 meeting
+# (구) 10/7 meeting — 수치 상세본
 
+> **미팅 본문은 `docs/meeting_1007_yj.md` 입니다**(2026-10-07 사용자 결정). 이 문서는 같은 Action Item 을
+> 수치 중심으로 정리한 상세본이고, 노션에도 "(구)" 제목으로 남겨 둡니다.
+>
 > Previous Action Item 대응. dataset Argoverse 2 (train 199,908 / val 24,988), 30 epoch cosine, 조건당 **seed 3판**.
 > 모든 비교는 **paired-seed**(같은 seed끼리 짝지어 차이를 보고 부호 일치를 판정) 기준임.
 > feasibility 지표는 전부 **predicted coordinate에서 복원한 heading** 기준임 — model output 기준 아님(1.2 참조).
