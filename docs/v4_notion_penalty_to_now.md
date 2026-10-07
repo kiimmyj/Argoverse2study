@@ -69,11 +69,14 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 | --- | --- | --- | --- | --- |
 | 순 회전량 | 65.6° | 45.4° | **40.5°** | 42.7° |
 | 왕복 포함 총 변화량 | 85.2° | 240.4° | **51.4°** | 161.8° |
+| \|Δψ\| median | 1.10° | 4.53° | **0.15°** | 2.45° |
+| \|Δψ\| p99 | 7.61° | 14.97° | **10.69°** | 13.05° |
 
 3. **3판 모두 ground truth보다 20° 넘게 적게 회전함** — penalty 없이 학습해도 45.4°이므로 under-turn은 **penalty와 무관한 공통 결함**임. penalty가 더하는 몫은 부족분 25° 중 약 5°임
 4. penalty가 바꾸는 것은 회전의 **분포 모양**임 — action penalty는 왕복 포함 총 변화량이 ground truth의 **0.60배**로 과하게 매끄럽고, coordinate penalty는 **1.90배**, no penalty는 **2.82배**로 왕복이 남음
-5. **미해결 — action penalty 행에 두 구현의 차이가 있음**: 검토 session의 독립 구현은 44.0° / 54.9°로 본 측정(40.5° / 51.4°)과 어긋남. no penalty·coordinate 행은 소수점까지 일치함. 입력은 동일함을 확인했음(덤프 궤적이 재추론과 bit-identical, top-1 100% 일치, minADE6가 로그와 소수 4자리 일치). 속력 gate 출처·heading source 등 5가지 정의 변형을 시도했으나 재현되지 않았음. **다만 어느 값이든 결론은 같음**(둘 다 ground truth 65.6°에 크게 못 미치고 no penalty 45.4°에 가까움)
-6. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
+5. **p99는 3판 모두 ground truth(7.61°)보다 두꺼움** — action 10.69 / coordinate 13.05 / no penalty 14.97°. action penalty는 median이 ground truth의 1/7(0.15 vs 1.10)인데 tail은 더 두꺼움 — 평소에는 꺾지 않다가 몇 step에서 몰아서 꺾는 형태임
+6. 두 session의 독립 구현이 순 회전량·총 변화량에서 소수 첫째 자리까지 일치함(교차검증)
+7. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
 3. coordinate penalty 3.0이 **turn의 heading 변화 분포를 가장 잘 재현함**(0.90° vs ground truth 1.10°) — minADE6는 action penalty와 동일함(1.442 vs 1.440)
 4. coordinate penalty 1.0은 반대로 모든 구간에서 ground truth보다 과하게 움직임(1.63~2.12°) — violation 2.28%의 내용임
 5. **violation rate 단일 지표로는 action penalty가 1위지만, ground truth 분포 재현으로 보면 coordinate penalty 3.0이 1위임** — 두 기준이 갈리므로 목적에 따라 선택해야 함
