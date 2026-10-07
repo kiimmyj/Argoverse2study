@@ -62,8 +62,19 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 | coordinate penalty 1.0 | 1.69 | 1.63 | 2.12 |
 | no penalty | 2.86 | 3.34 | 4.68 |
 
-1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 비용이 직진 +0.055 대비 turn **+0.164 m**로 3배임. 즉 jitter만 억제하는 것이 아니라 **실제 회전까지 억제하고 있음**
-2. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
+1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 비용이 직진 +0.055 대비 turn **+0.164 m**로 3배임
+2. **"실제 회전을 억제한다"는 서술은 과장이었음(2026-10-07 정정)** — 두 session이 서로 다른 모집단으로 총 회전량을 측정했고, 합치면 다음과 같음
+
+| 측정 | 모집단 | ground truth | no penalty | action 1.0 | coordinate 1.0 |
+| --- | --- | --- | --- | --- | --- |
+| 조건부 | winner mode · 3판 모두 정답 route 선택 (2,062건) | 63.8° | 56.7° | **56.5°** | 52.5° |
+| 무조건 | top-1 mode · turn 구간 전체 (4,021건) | 65.6° | 45.4° | **40.5°** | 42.7° |
+
+3. **조건부 기준으로는 penalty 효과가 거의 없음**(56.7 vs 56.5) — route를 올바로 선택하고 best mode를 쓰면 penalty를 걸어도 충분히 회전함
+4. 두 측정의 차이 약 16°는 **route 선택과 top-1 mode 선택**에서 발생함 — 회전 능력이 아니라 **mode selection 문제**이며, lane change의 top-1 적중률 문제와 동일한 원인임
+5. 어느 기준으로도 **3판 모두 ground truth보다 적게 회전함**(조건부 7~11°, 무조건 20~25°) — **penalty와 무관한 공통 결함**임
+6. penalty가 바꾸는 것은 회전의 **분포 모양**임 — 왕복 포함 총 heading 변화량이 action penalty 0.60배 / coordinate 1.0 1.90배 / no penalty 2.82배(ground truth 대비)임
+7. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 0.06° → 0.16°로 **2.7배**에 그쳐 turn 구조를 재현하지 못함
 3. coordinate penalty 3.0이 **turn의 heading 변화 분포를 가장 잘 재현함**(0.90° vs ground truth 1.10°) — minADE6는 action penalty와 동일함(1.442 vs 1.440)
 4. coordinate penalty 1.0은 반대로 모든 구간에서 ground truth보다 과하게 움직임(1.63~2.12°) — violation 2.28%의 내용임
 5. **violation rate 단일 지표로는 action penalty가 1위지만, ground truth 분포 재현으로 보면 coordinate penalty 3.0이 1위임** — 두 기준이 갈리므로 목적에 따라 선택해야 함
@@ -389,7 +400,7 @@ ground truth의 총 진행방향 변화량으로 val을 3구간으로 나눠 다
 1. penalty는 **필요함** — 제거하면 top-1 trajectory step의 8.47%가 label 상한을 넘음(ground truth 0.35%)
 2. penalty target을 model output에서 **predicted coordinate로 교체하면 accuracy cost 없이** violation을 0.29배로 낮춤 — 8.47% → 2.28% 구간은 무상임
 3. 2.28% 아래로 내리는 것부터 약 +0.08 m의 cost가 발생하며, 이는 target이 아니라 **penalty 강도**의 함수임
-4. 현행 action penalty의 cost는 **turn scenario에 집중됨**(+0.164 m) — jitter만이 아니라 실제 회전을 억제하고 있음. turn의 |Δψ| median이 ground truth의 1/7임
+4. 현행 action penalty의 cost는 **turn scenario에 집중됨**(+0.164 m)이고 turn의 |Δψ| median이 ground truth의 1/7임. 단 **총 회전량 기준으로는 penalty가 주원인이 아님**(2026-10-07 정정) — 예측 40.5° vs ground truth 65.6°인데 penalty 없이도 45.4°임. penalty가 바꾸는 것은 회전의 **분포 모양**임
 5. 기존 violation metric은 penalty가 최소화하는 변수를 그대로 측정하는 self-referential metric이었음 — 모든 비교를 coordinate 기준으로 재측정했음
 6. preprocessing smoothing은 기존 방식이 무효였고, 신규 방식은 input quality를 개선했으나 accuracy 이득은 검출되지 않았음
 7. lane change 실패 원인은 smoothing도 band rule도 아닌 **lateral mode axis 부재**였음 — 구현했으나 전체 지표로는 효과가 검출되지 않아 전용 평가군이 필요함

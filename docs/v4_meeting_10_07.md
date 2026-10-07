@@ -57,9 +57,20 @@ ground truth의 총 heading 변화량으로 val을 3구간으로 나눠 재측�
 | coordinate 3.0 | 0.38 | 0.55 | 0.89 |
 | **coordinate 1.0 + lane-yaw 3.0** | 0.73 | 0.95 | **1.34** |
 
-1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 paired 차이가 직진 +0.055 / 완만 +0.093 / **회전 +0.164 m**로 3배임. jitter만 억제하는 것이 아니라 **실제 회전까지 억제하고 있음**
-2. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 2.7배에 그쳐 turn 구조를 재현하지 못함
-3. **lane-yaw가 turn에서 ground truth에 가장 근접함**(1.34 vs 1.10)
+1. **penalty의 accuracy cost는 turn에 집중됨** — action penalty의 paired 차이가 직진 +0.055 / 완만 +0.093 / **회전 +0.164 m**로 3배임
+2. **단 "실제 회전을 억제한다"는 서술은 과장이었음(2026-10-07 정정)** — 두 session이 서로 다른 모집단으로 총 회전량을 측정했고, 합치면 다음과 같음
+
+| 측정 | 모집단 | ground truth | no penalty | action 1.0 | coordinate 1.0 |
+| --- | --- | --- | --- | --- | --- |
+| 조건부 | winner mode · 3판 모두 정답 route 선택 (2,062건) | 63.8° | 56.7° | **56.5°** | 52.5° |
+| 무조건 | top-1 mode · turn 구간 전체 (4,021건) | 65.6° | 45.4° | **40.5°** | 42.7° |
+
+3. **조건부 기준으로는 penalty 효과가 거의 없음**(56.7 vs 56.5) — route를 올바로 선택하고 best mode를 쓰면 penalty를 걸어도 충분히 회전함
+4. 두 측정의 차이 약 16°는 **route 선택과 top-1 mode 선택**에서 발생함 — 회전 능력이 아니라 **mode selection 문제**이며, lane change의 top-1 적중률 문제와 동일한 원인임
+5. 어느 기준으로도 **3판 모두 ground truth보다 적게 회전함**(조건부 7~11°, 무조건 20~25°) — **penalty와 무관한 공통 결함**임
+6. penalty가 바꾸는 것은 회전의 **분포 모양**임 — 왕복 포함 총 heading 변화량이 action penalty 0.60배 / coordinate 1.0 1.90배 / no penalty 2.82배(ground truth 대비)임
+7. ground truth는 직진 0.12° → 회전 1.10°로 **9배 증가**함. action penalty는 2.7배에 그쳐 turn 구조를 재현하지 못함
+8. **lane-yaw가 turn에서 ground truth에 가장 근접함**(1.34 vs 1.10)
 
 ### 1.6 lane heading alignment loss (신규)
 
