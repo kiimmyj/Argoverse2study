@@ -34,80 +34,50 @@
 
 **조치** — 모든 수치를 predicted coordinate 기준으로 재측정했습니다. ψ = atan2(Δy, Δx), |Δψ| > 7.3°/step, 양쪽 step 속력 1 m/s 이상일 때만 셉니다. 재채점한 minADE6가 학습 로그의 best와 소수점 셋째 자리까지 일치해 측정 코드를 검증했습니다.
 
-### 1.2 기존 문제 ② penalty가 turn을 억제함
+### 1.2 기존 문제 ② action penalty의 accuracy cost가 회전에 몰림
 
-accuracy cost를 ground truth의 회전량으로 나눠 보면 직진 +0.055 / 완만 +0.093 / **회전 +0.164 m**입니다. jitter(흔들림)만 억제하는 것이 아니라 실제 turn까지 억제하고 있었습니다.
+기존 action penalty의 accuracy cost를 ground truth의 회전량으로 나눠 보면 직진 +0.055 / 완만 +0.093 / **회전 +0.164 m**입니다(no penalty 대비 paired 차이, 3 seeds 평균). cost가 회전에 몰려 있었습니다.
 
-### 1.3 같은 scenario를 세 판으로 — 기존 모델과 현재 모델이 실제로 어떻게 다른가
+**회전량을 줄이는 몫은 일부입니다.** 회전 구간(ground truth 순 회전량 ≥ 30°, 4,021건)에서 확률 1위 mode의 평균 순 회전량은 ground truth 65.6° / no penalty 45.4° / action penalty 40.5°입니다. penalty와 상관없이 이미 20° 넘게 덜 돌고 있었고, action penalty는 거기에 5° 정도를 더했습니다(전체 부족분 25°의 1/5). 눈에 띄게 달라진 것은 **꺾는 방식**입니다.
 
-세 판 모두 같은 입력(ah2)·같은 schedule(30에폭 cosine)·seed 0이고, val 24,988의 scenario 순서가 같아 **같은 장면을 나란히** 볼 수 있습니다.
+| 회전 구간 (정답 순 회전량 ≥ 30°, 4,021건, 확률 1위 mode) | ground truth | action penalty |
+| --- | --- | --- |
+| 순 회전량 | 65.6° | 40.5° |
+| 총 변화량 (\|Δψ\|를 모두 더함, 왕복 포함) | 85.2° | 51.4° |
+| \|Δψ\| 중앙값 | 1.10°/step | 0.15°/step |
+| \|Δψ\| p99 | 7.61° | 10.69° |
 
-| 판 | penalty target | 좌표 기준 violation (3 seeds) | minADE6 |
-| --- | --- | --- | --- |
-| no penalty | — | 8.47% | 1.359 |
-| action penalty 1.0 (기존 기본) | 모델이 낸 Δθ | 0.76% | 1.440 |
-| coordinate penalty 1.0 (현재 기본) | 예측 좌표의 ψ = atan2(Δy, Δx) | 2.28% | 1.359 |
+(seed 0, best checkpoint. 순 회전량은 예측 좌표의 Δψ를 부호 그대로 합친 절댓값이고, 양쪽 step 속력이 1 m/s 이상인 step만 셉니다.)
 
-#### ① 직진 — penalty가 하는 일
+- 총 변화량이 ground truth보다 작고 중앙값이 1/7 수준이라 평소에는 거의 안 꺾습니다. 그런데 p99는 오히려 커서 **몇 step에 몰아서** 꺾습니다. 회전 중에는 ground truth도 1°/step 안팎으로 꾸준히 꺾는데, 이 패턴을 재현하지 못합니다.
+- 이 꺾는 방식이 accuracy cost로 이어지는 경로는 확인하지 못했습니다. 가설은 하나 있습니다. action penalty는 임계가 없어서, ground truth에도 있는 정상적인 꺾임 변화까지 함께 누른다는 것입니다(검증 안 함).
+- 회전 구간의 cost는 seed별로 +0.086 / +0.102 / +0.304로 폭이 넓습니다. 방향은 일치하지만 크기는 넓게 봐야 합니다.
 
-![penalty mechanism](../viz/v4/penalty/penalty_mech.png)
+### 1.3 현재 방식 — coordinate penalty와 채택 근거
 
-**읽는 법**
-- 위 지도 세 개가 같은 scenario입니다. 회색이 과거 5초, 검정이 ground truth 6초, 파란 선 6개가 예측 6 mode(짙고 굵을수록 확률이 높음), ★가 승자(끝점 오차가 가장 작은 mode)입니다.
-- 아래 왼쪽 |Δψ|는 "예측 좌표가 한 step(0.1초)에 몇 도 꺾였나"입니다. 7.3°를 넘으면 violation으로 셉니다. 아래 가운데 |Δθ|는 모델이 낸 action 쪽 각도입니다.
-- **지도에서는 세 판이 거의 겹쳐 보입니다.** 차이는 시계열에서만 드러납니다 — 그래서 penalty를 걸어도 minADE6가 거의 안 변합니다.
+#### ① 이전과 현재
 
-**이 scenario에서**
-- no penalty: |Δψ|가 임계를 22/58 step 넘습니다. 좌표가 톱니처럼 꺾입니다.
-- action penalty: |Δθ|가 바닥에 붙습니다(0/58). penalty가 직접 누르는 변수입니다.
-- coordinate penalty: 임계 위만 잘립니다(4/58). hinge가 "넘는 분량"만 벌하므로 **임계 아래 흔들림은 남습니다.**
-- 직진에서는 route curvature k(s) ≈ 0이라 ψ = k(s) + θ에서 Δψ ≈ Δθ입니다. 두 penalty가 사실상 같은 변수를 누릅니다. **차이는 turn에서 납니다.**
+![penalty를 어디에 거나](figures/v4/penalty/penalty_change.png)
 
-#### ② 회전 — 기존 penalty가 치르는 cost
+| | 이전 (action penalty) | 현재 (coordinate penalty, 10/6부터 기본) |
+| --- | --- | --- |
+| penalty가 보는 값 | 모델이 낸 action (가속도 a, 방향 변화 Δθ) | predicted coordinate에서 복원한 진행방향 ψ = atan2(Δy, Δx) |
+| 계산 방식 | 연속한 두 step의 값이 달라지는 만큼 전부 (제곱, **임계 없음**) | 한 step의 \|Δψ\|가 7.3°를 넘은 만큼만 (hinge, **임계 있음**). 양쪽 step 속력이 1 m/s 이상일 때만 셈 |
+| 코드 | `--smooth-mode action --smooth 1.0` (재현할 때만 명시) | `--smooth-mode xy --smooth-xy 1.0` (기본) |
 
-![penalty turn](../viz/v4/penalty/penalty_turn.png)
+#### ② 채택 근거
 
-**읽는 법** — 아래 왼쪽은 누적 진행방향 변화입니다. 검정(ground truth)보다 평평하면 덜 돈 것입니다. 아래 가운데는 step마다의 |Δψ|입니다. 회전 중에는 ground truth도 1°/step 안팎으로 **꾸준히** 꺾습니다.
+1. **재는 곳과 거는 곳을 맞췄습니다.** 위반 여부는 실제로 쓰는 궤적(predicted coordinate)에서 정해집니다. 모델 내부 값으로 보장한 것이 좌표에서는 성립하지 않는 사례가 문헌에도 있습니다. MultiPath++(Varadarajan et al. 2021) 표 4에서 제어 출력을 쓰면 heading 기준 비실현율(TRI-h)은 4.10% → 0.00%가 되지만, 좌표 기준(TRI-c)은 1.08% → 1.22%로 오히려 늘었습니다(WOMD val). 우리도 같은 일이 있었습니다(1.1절: model output 기준은 0.001% 수준, 좌표 기준은 0.7~0.8%).
+2. **임계를 7.3°로 둔 것은 정상 주행을 누르지 않기 위해서입니다.** 7.3°/step은 AV2 라벨 전수조사에서 차체 heading의 step 변화 `|Δh|`의 p99.99입니다(`docs/heading_quality.md` 3.1절). 이 값 안쪽은 실제 차가 내는 움직임이라 벌하지 않고, 넘는 분량만 벌합니다. 임계가 없던 이전 방식은 1.2절처럼 ground truth에 있는 꺾임까지 눌렀을 가능성이 있습니다.
+3. **정확도를 내주지 않고 violation rate가 내려갔습니다.** 8조건 × 3 seeds = 24판에서 violation rate 8.47% → 2.28%, minADE6 1.359 → 1.359(paired +0.000, seed별 부호 불일치)였습니다(1.4절). seed 간 minADE6 범위도 0.035에서 0.006으로 줄었습니다.
+4. **강도 1.0을 고른 이유.** 시험한 강도는 1.0과 3.0 두 가지입니다. 3.0은 violation rate가 1.13%까지 내려가지만 minADE6 +0.083이 붙었고(paired 3 seeds 일치), 1.0은 cost가 검출되지 않았습니다. 그래서 1.0을 기본으로 했습니다. 그 사이 값은 시험하지 않았습니다.
 
-회전군(ground truth 총 회전량 ≥ 30°, 세 판 모두 정답 route를 탄 2,062건)에서
-- ground truth 평균 회전량 63.8° / no penalty 56.7° / action 56.5° / coordinate 52.5°
-- **세 판 모두 ground truth보다 덜 돕니다.** 다만 덜 도는 **방식**이 다릅니다. action penalty 판은 |Δψ| 중앙값이 0.24°/step으로 ground truth(1.10°)의 1/4이라, 회전 구간 내내 거의 안 꺾다가 몇 step에서 몰아 꺾습니다. coordinate penalty 판은 중앙값이 2.56°로 ground truth보다 커서 회전 중에도 잔잔한 흔들림이 남습니다.
+#### ③ 한계
 
-#### ③ 구간별 집계
-
-![penalty bins](../viz/v4/penalty/penalty_bins.png)
-
-**읽는 법** — 가로축은 ground truth가 6초 동안 실제로 돈 각도로 나눈 세 구간입니다. 위 두 칸은 ground truth(검정)에 가까울수록 좋습니다.
-
-| 구간 (n) | ground truth \|Δψ\| 중앙값 | no penalty | action 1.0 | coordinate 1.0 |
-| --- | --- | --- | --- | --- |
-| 직진 <5° (15,711) | 0.12°/step | 3.09° | 0.06° | 2.04° |
-| 완만 5–30° (5,256) | 0.35° | 3.69° | 0.10° | 1.89° |
-| 회전 ≥30° (4,021) | 1.10° | 4.85° | 0.24° | 2.53° |
-
-- action penalty 판은 **ground truth보다도 매끄럽습니다.** 그런데 p99는 11.32°로 ground truth(7.61°)보다 커서, "평소엔 안 꺾고 가끔 몰아 꺾는" 분포가 됩니다.
-- coordinate penalty 판은 중앙값이 ground truth보다 크고 p99는 13.26°입니다. hinge가 꼬리만 자르기 때문에 **꼬리는 눌리고 중앙은 남는** 모양이 됩니다. 6장 "해야 할 것" ④(tail을 겨냥하는 term)가 여기서 나옵니다.
-- paired Δ minADE6(3 seeds, no penalty 대비): action은 직진 +0.055 / 완만 +0.093 / **회전 +0.164**, coordinate는 −0.006 / −0.003 / **+0.030**입니다. 단 회전 구간의 action cost는 seed별로 +0.086 / +0.102 / +0.304로 폭이 넓습니다. 방향은 일치하지만 크기는 넓게 봐야 합니다.
-
-#### ④ 분포로 다시 보기
-
-![penalty box](../viz/v4/penalty/penalty_box.png)
-
-**읽는 법** — 상자가 가운데 50%(Q1~Q3), 상자 안 선이 중앙값, ◆가 평균, 수염이 5~95 백분위입니다. ③의 막대는 중앙값·p99 **두 점**이었고, 이 그림은 같은 값의 **분포 모양**입니다.
-
-회전 구간(≥30°)의 |Δψ| 상자는 이렇게 갈립니다.
-
-| | 중앙값 | 상자(Q1~Q3) | 수염 끝(p95) |
-| --- | --- | --- | --- |
-| ground truth | 1.10 | 0.37~1.98 | 3.59 |
-| no penalty | 4.85 | 2.49~7.03 | 9.62 |
-| action penalty 1.0 | 0.24 | 0.07~1.09 | 6.15 |
-| coordinate penalty 1.0 | 2.53 | 0.88~5.11 | 7.98 |
-
-- no penalty는 상자가 통째로 ground truth 위에 있습니다 — 모든 step이 과하게 꺾입니다.
-- action penalty는 상자가 바닥에 눌려 **ground truth보다도 아래**입니다. 회전 중에도 안 꺾습니다.
-- coordinate penalty는 상자가 ground truth 위에 있지만 no penalty보다 낮습니다 — **꼬리를 자른 모양**입니다.
-- **오른쪽 칸(minADE6)은 세 판의 상자가 거의 겹칩니다.** 회전 구간에서도 중앙값 차이는 +0.08 m(action − no penalty) 수준이고, ③에서 본 평균 차이는 **상위 5%의 긴 꼬리**에서 나옵니다. seed마다 회전 구간 cost가 +0.086 / +0.102 / +0.304로 흔들린 이유가 이것입니다 — 꼬리 몇 건이 평균을 끌고 다닙니다.
+- **violation rate가 더는 독립 검증이 아닙니다.** penalty가 누르는 값(predicted coordinate의 \|Δψ\|)과 지표가 같은 값이 되어서, 이 지표만으로는 "실제로 매끄러워졌다"를 확인할 수 없습니다. 1.1절의 구조가 좌표 쪽에서 되풀이될 수 있습니다. jerk, 횡가속 같은 별도 지표를 새 기본 판에서 재측정한 기록은 아직 없습니다.
+- **좌표에 penalty를 거는 직접 선례는 찾지 못했습니다.** 좌표로 "재는" 관행은 확인했지만(MultiPath++ TRI-c, WOSAC), 이 방식을 정당화하는 근거는 우리 실험이 중심입니다.
+- **남은 문제.** 2.28%는 ground truth(0.35%)보다 높습니다. hinge라서 임계 아래 흔들림은 남고, 회전 구간 p99는 13.05°로 ground truth(7.61°)보다 큽니다(확률 1위 mode, seed 0). tail을 겨냥하는 term은 6장 "해야 할 것" ④에서 다룹니다.
+- **임계가 속도와 무관한 고정값입니다.** 7.3°/step은 약 3.8 m/s 이하에서 회전반경 3 m 미만에 해당합니다(R = v·0.1 s ÷ 7.3°, 계산값). 저속에서는 임계가 느슨해서 비현실적인 꺾임을 통과시킬 수 있습니다. 속도에 따라 달라지는 임계는 시험하지 않았습니다.
 
 ### 1.4 측정 결과 (조건당 3 seeds)
 
@@ -338,7 +308,7 @@ minADE6 1.359 m 한 줄은 "평균적으로 1.36 m 틀린다"만 말합니다. *
 1. **전체 오차의 40%가 회전 두 cluster에서 나옵니다.** scenario의 25.4%(C0 18.1% + C6 7.3%)가 오차의 39.9%(24.0 + 15.9)를 만듭니다. "회전이 어렵다"는 알고 있었지만, **전체 지표를 개선하려면 어디를 고쳐야 하는지**가 숫자로 나옵니다.
 2. **가장 어려운 상황은 '급가감속이 섞인 회전'입니다**(minADE6 2.94 m, miss 82%). 같은 회전이라도 속도가 함께 변하면 1.79 → 2.94로 뜁니다. 회전 전용 평가군을 만들 때 이 둘을 섞으면 안 됩니다.
 3. **오차는 시간에 비례해 벌어지지 않습니다.** C6은 3초 이후 기울기가 꺾여 6초에 7 m를 넘고, C5(감속 → 정지)는 6초 내내 1 m 아래입니다. 6초 끝점 하나로만 보는 minFDE6은 이 차이를 지웁니다.
-4. **violation rate도 회전에 몰립니다**(C0 6.22% / C6 5.33% vs 직진 계열 2.1~2.4%). 1.3절의 구간별 집계와 독립적으로 같은 결론이 나옵니다.
+4. **violation rate도 회전에 몰립니다**(C0 6.22% / C6 5.33% vs 직진 계열 2.1~2.4%). 1.2절의 회전량 구간별 cost(직진 +0.055 → 회전 +0.164 m)와 독립적으로 같은 결론이 나옵니다.
 
 ![cluster별 모델 행동](../viz/v4/v4_l4nw_ah2_full_smxy1_cos30_s0/situation/g4_behavior.png)
 
