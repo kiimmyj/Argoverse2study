@@ -14,6 +14,7 @@ viz_v4_penalty_example.py - 흔들림 벌점 세 판이 같은 시나리오에�
     penalty_mech.png   직진 예시 — 벌점이 흔들림을 어떻게 없애나 (|Δψ| · |Δθ| 시계열)
     penalty_turn.png   회전 예시 — 세 판이 회전을 어떻게 다르게 그리나 (누적 진행방향 · |Δψ|)
     penalty_bins.png   집계 — 정답 회전량 구간별 |Δψ| 중앙값·p99·위반율·minADE6
+    penalty_box.png    같은 구간을 상자로 — 분포 모양(중앙·사분위·꼬리)
 
 측정 정의는 src/score_xy_viol.py 와 같다(움직인 스텝만, 임계 7.3°/step). 시나리오는 규칙으로 고르고
 규칙을 그림 안에 적는다(체리피킹 방지). 고른 결과·집계값은 penalty_example_picks.json 에 남긴다.
@@ -325,6 +326,82 @@ def fig_bins(P, G, out):
             for (lo, hi, lab), m in zip(BINS, ms)}
 
 
+def fig_box(P, G, out):
+    """구간별 분포 — 막대(중앙값·p99 두 점)로는 안 보이는 분포 모양을 상자로 본다."""
+    import matplotlib.pyplot as plt
+    ms = [(G["turn"] >= lo) & (G["turn"] < hi) for lo, hi, _ in BINS]
+    labs = [lab for _, _, lab in BINS]
+    ser = [("정답", C.C_GT)] + [(p_.name, p_.color) for p_ in P]
+    fig, axes = plt.subplots(1, 3, figsize=(17.6, 7.2))
+
+    def draw(ax, groups, ylab, title, ref=None, ref_lab=None):
+        pos, cols = [], []
+        data = []
+        for b in range(len(BINS)):
+            for j, (name, color) in enumerate(ser):
+                if groups[b][j] is None:
+                    continue
+                data.append(groups[b][j])
+                pos.append(b * (len(ser) + 1.2) + j)
+                cols.append(color)
+        bp = ax.boxplot(data, positions=pos, whis=(5, 95), showfliers=False, showmeans=True,
+                        patch_artist=True, widths=0.78,
+                        meanprops=dict(marker="D", ms=4.0, mfc=C.SURF, mec=C.INK, mew=0.9),
+                        medianprops=dict(color=C.INK, lw=1.6),
+                        whiskerprops=dict(color=C.AXIS, lw=1.0), capprops=dict(color=C.AXIS, lw=1.0))
+        for b_, c in zip(bp["boxes"], cols):
+            b_.set(facecolor=c, alpha=0.55, edgecolor=C.AXIS, lw=0.9)
+        ax.set_xticks([b * (len(ser) + 1.2) + (len(ser) - 1) / 2 for b in range(len(BINS))])
+        ax.set_xticklabels(labs, fontsize=9)
+        ax.set_xlabel("정답 총 회전량 구간")
+        ax.set_ylabel(ylab)
+        ax.set_title(title, fontsize=10.8)
+        if ref is not None:
+            ax.axhline(ref, color=C.C_ORANGE, lw=1.2, ls=(0, (4, 2)))
+            ax.text(ax.get_xlim()[1], ref, f"{ref_lab} ", color=C.C_ORANGE, fontsize=7.8, va="bottom",
+                    ha="right")
+
+    gpsi = [[G["dp"][m][G["ok"][m]]] + [p_.dp_pool(m) for p_ in P] for m in ms]
+    draw(axes[0], gpsi, "|Δψ| [°/step]", "step마다의 꺾임 분포", LIM, f"라벨 임계 {LIM}°/step")
+    axes[0].set_ylim(-0.3, 12)
+    gade = [[None] + [p_.minade[m] for p_ in P] for m in ms]
+    draw(axes[1], gade, "minADE6 [m]", "시나리오마다의 거리오차 분포")
+    axes[1].set_ylim(0, 6)
+    from matplotlib.patches import Patch
+    axes[0].legend([Patch(facecolor=c, alpha=0.55, edgecolor=C.AXIS) for _, c in ser],
+                   [n for n, _ in ser], fontsize=8.4, loc="upper left", ncol=2)
+    q = lambda v, k: np.percentile(v, k)
+    m_turn = ms[2]
+    note(axes[2], [
+        "읽는 방법",
+        "상자 = 가운데 50%(Q1~Q3) · 상자 안 선 = 중앙값 · ◆ = 평균 · 수염 = 5~95 백분위입니다.",
+        "바깥값은 점으로 찍지 않았습니다(왼쪽 칸은 step 수가 수백만 개라 점을 찍으면 상자가 묻힙니다).",
+        "앞 그림의 막대는 중앙값·p99 **두 점**이었습니다. 이 그림은 같은 값의 **분포 모양**을 봅니다.",
+        "",
+        "왼쪽 칸에서 읽히는 것 (회전 구간 기준)",
+        f"   정답       중앙 {q(gpsi[2][0], 50):.2f} · 상자 {q(gpsi[2][0], 25):.2f}~{q(gpsi[2][0], 75):.2f} "
+        f"· 수염 끝 {q(gpsi[2][0], 95):.2f}",
+        *[f"   {n:10s} 중앙 {q(gpsi[2][j + 1], 50):.2f} · 상자 {q(gpsi[2][j + 1], 25):.2f}~"
+          f"{q(gpsi[2][j + 1], 75):.2f} · 수염 끝 {q(gpsi[2][j + 1], 95):.2f}"
+          for j, (n, _) in enumerate(ser[1:])],
+        "",
+        "   벌점 없음은 상자가 통째로 정답 위에 있습니다 — 모든 step 이 과하게 꺾입니다.",
+        "   액션 벌점은 상자가 바닥에 눌려 **정답보다도 아래**입니다. 회전 중에도 안 꺾는다는 뜻입니다.",
+        "   좌표 벌점은 상자가 정답 위에 있지만 벌점 없음보다 낮습니다 — 꼬리를 자른 모양입니다.",
+        "",
+        "오른쪽 칸 — 세 판의 상자가 거의 겹칩니다. 회전 구간에서도 중앙값 차이는 "
+        f"{q(P[1].minade[m_turn], 50) - q(P[0].minade[m_turn], 50):+.2f} m(액션−없음) 수준이고,",
+        "   앞 그림의 평균 차이는 **긴 꼬리**(상위 5%가 5 m 를 넘는 구간)에서 나옵니다.",
+        "   그래서 평균 하나로 비교할 때 seed 마다 크게 흔들렸던 것입니다(+0.086 / +0.102 / +0.304).",
+    ], fs=8.4)
+    fig.suptitle("구간별 분포 — 상자로 본 세 판 (ah2 · 30에폭 코사인 · 시드 0 · val 24,988)",
+                 fontsize=14, x=0.015, ha="left")
+    fig.tight_layout(rect=[0, 0, 1, 0.945])
+    C.savefig(fig, out)
+    return {lab: {n: {"p50": round(float(q(gpsi[b][j], 50)), 3), "p95": round(float(q(gpsi[b][j], 95)), 3)}
+                  for j, (n, _) in enumerate(ser)} for b, lab in enumerate(labs)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(OUT))
@@ -345,9 +422,11 @@ def main():
              "winner_viol_pct": {p.name: round(p.viol_pct(), 3) for p in P},
              "mech": fig_mech(P, G, out / "penalty_mech.png"),
              "turn": fig_turn(P, G, out / "penalty_turn.png"),
-             "bins": fig_bins(P, G, out / "penalty_bins.png")}
+             "bins": fig_bins(P, G, out / "penalty_bins.png"),
+             "box": fig_box(P, G, out / "penalty_box.png")}
     (out / "penalty_example_picks.json").write_text(json.dumps(picks, indent=2, ensure_ascii=False))
-    print(f"[done] {out} — penalty_mech.png · penalty_turn.png · penalty_bins.png", flush=True)
+    print(f"[done] {out} — penalty_mech.png · penalty_turn.png · penalty_bins.png · penalty_box.png",
+          flush=True)
 
 
 if __name__ == "__main__":

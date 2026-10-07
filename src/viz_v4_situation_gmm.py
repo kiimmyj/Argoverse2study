@@ -24,6 +24,7 @@ K 는 어떻게 고르나
     g4_behavior.png  군집별 모델 행동 (끝점 종·횡 편향, 모드 다양성, 확률, 밴드 이탈)
     g5_tree.png      군집을 재현하는 얕은 결정 트리 (서술용 규칙이지 인과가 아니다)
     g6_cases.png     군집마다 대표 시나리오 한 개 (중앙값에 가장 가까운 판)
+    g7_box.png       군집별 분포 박스 플롯 — 평균 막대가 가리는 폭
     summary.json / summary.md
 
     python src/viz_v4_situation_gmm.py --tag v4_l4nw_ah2_full_smxy1_cos30_s0
@@ -164,6 +165,27 @@ def summarize(df, X, lab, conf, k, win_err):
             "top_cls": {k2: int(v) for k2, v in d["cls"].value_counts().head(3).items()},
         })
     return rows
+
+
+def box_panel(ax, data, labels, colors, ylab, title, ref=None, ref_lab=None, zero=False):
+    """박스 플롯 한 칸 — 상자 = 사분위(Q1~Q3), 가운데 선 = 중앙값, ◆ = 평균, 수염 = 5~95 백분위.
+    바깥값(5% 미만·95% 초과)은 점으로 찍지 않는다 — 2만 5천 개를 찍으면 상자가 안 보인다."""
+    bp = ax.boxplot(data, whis=(5, 95), showfliers=False, showmeans=True, patch_artist=True,
+                    widths=0.62, meanprops=dict(marker="D", ms=4.2, mfc=C.SURF, mec=C.INK, mew=0.9),
+                    medianprops=dict(color=C.INK, lw=1.6),
+                    whiskerprops=dict(color=C.AXIS, lw=1.0), capprops=dict(color=C.AXIS, lw=1.0))
+    for b, c in zip(bp["boxes"], colors):
+        b.set(facecolor=c, alpha=0.55, edgecolor=C.AXIS, lw=0.9)
+    if ref is not None:
+        ax.axhline(ref, color=C.INK2, lw=1.1, ls=(0, (4, 2)))
+        if ref_lab:
+            ax.text(0.55, ref, f" {ref_lab}", fontsize=7.6, color=C.INK2, va="bottom", ha="left")
+    if zero:
+        ax.axhline(0, color=C.AXIS, lw=1.0)
+    ax.set_xticklabels(labels, fontsize=8.6)
+    ax.set_ylabel(ylab)
+    ax.set_title(title, fontsize=10.5)
+    return bp
 
 
 def g1_select(rows_k, kbest, lab, conf, out):
@@ -460,6 +482,70 @@ def g6_cases(cx, df, lab, rows, out):
     return picks
 
 
+def g7_box(df, lab, rows, tot, out):
+    """군집별 분포 — 막대(평균)가 가리는 폭을 본다."""
+    import matplotlib.pyplot as plt
+    cols = [C.SERIES[j % len(C.SERIES)] for j in range(len(rows))]
+    labels = [f"C{r['cluster']}\n{r['pct']:.1f}%" for r in rows]
+    sel = [lab == r["cluster"] for r in rows]
+    panels = [("minade", "minADE6 [m]", "정확도 — 6모드 중 최선", tot["minade"], "전체 평균", False),
+              ("top1_ade", "top-1 ADE [m]", "확률 1위 모드의 오차", tot["top1_ade"], "전체 평균", False),
+              ("ds_end", "종방향 ds [m]", "끝점이 앞뒤로 얼마나 어긋나나 (− = 덜 나아감)", None, None, True),
+              ("dd_end", "횡방향 dd [m]", "끝점이 좌우로 얼마나 어긋나나 (− = 오른쪽)", None, None, True)]
+    fig, axes = plt.subplots(2, 3, figsize=(16.8, 10.2))
+    cells = [axes[0][0], axes[0][1], axes[1][0], axes[1][1]]
+    stat = {}
+    for ax, (col, ylab, title, ref, rlab, zero) in zip(cells, panels):
+        data = [df[col].to_numpy()[m] for m in sel]
+        box_panel(ax, data, labels, cols, ylab, title, ref, rlab, zero)
+        if col in ("minade", "top1_ade"):
+            ax.set_ylim(0, np.percentile(np.concatenate(data), 97))
+        else:
+            lo, hi = np.percentile(np.concatenate(data), [2, 98])
+            ax.set_ylim(lo, hi)
+        stat[col] = [{"cluster": int(r["cluster"]),
+                      "p25": round(float(np.percentile(d, 25)), 3),
+                      "p50": round(float(np.percentile(d, 50)), 3),
+                      "p75": round(float(np.percentile(d, 75)), 3),
+                      "p95": round(float(np.percentile(d, 95)), 3),
+                      "mean": round(float(d.mean()), 3)} for r, d in zip(rows, data)]
+    axes[0][2].axis("off"); axes[1][2].axis("off")
+    md = {r["cluster"]: s_ for r, s_ in zip(rows, stat["minade"])}
+    worst = max(rows, key=lambda r: md[r["cluster"]]["p95"])
+    skew = max(rows, key=lambda r: md[r["cluster"]]["mean"] - md[r["cluster"]]["p50"])
+    axes[0][2].text(0.0, 1.0, "\n".join([
+        "읽는 방법",
+        "상자 = 가운데 50%(Q1~Q3), 상자 안 선 = 중앙값, ◆ = 평균, 수염 = 5~95 백분위입니다.",
+        "바깥값은 점으로 찍지 않았습니다 — 2만 5천 개를 찍으면 상자가 보이지 않습니다.",
+        "③·④의 막대는 **평균 하나**였습니다. 이 그림은 같은 수치의 **폭**을 봅니다.",
+        "",
+        "왜 보는가 — 평균은 꼬리에 끌려갑니다.",
+        f"   {'C%d %s' % (skew['cluster'], skew['name'])}: 중앙값 {md[skew['cluster']]['p50']:.2f} m 인데 "
+        f"평균 {md[skew['cluster']]['mean']:.2f} m 입니다.",
+        "   즉 '평균적으로 그 정도 틀린다' 가 아니라 '대부분은 더 잘 맞고 일부가 크게 틀린다' 입니다.",
+        f"   {'C%d %s' % (worst['cluster'], worst['name'])}: 상위 5%가 {md[worst['cluster']]['p95']:.1f} m 를 넘습니다.",
+        "",
+        "끝점 편차(아래 두 칸)는 상자가 0 선을 어느 쪽으로 넘는지를 봅니다.",
+        "   상자 전체가 0 아래면 '가끔' 이 아니라 **체계적으로** 덜 나아가는 것입니다.",
+    ]), transform=axes[0][2].transAxes, va="top", ha="left", fontsize=8.8, color=C.INK, linespacing=1.5,
+        bbox=dict(boxstyle="round,pad=0.55", fc="white", ec=C.GRID, lw=0.8))
+    tb = ["   " + "군집".ljust(22) + "".join(h.rjust(8) for h in ("p25", "중앙값", "p75", "p95", "평균"))]
+    for r, d in zip(rows, stat["minade"]):
+        tb.append("   " + f"C{r['cluster']} {r['name']}".ljust(22)
+                  + f"{d['p25']:8.2f}{d['p50']:8.2f}{d['p75']:8.2f}{d['p95']:8.2f}{d['mean']:8.2f}")
+    allm = df["minade"].to_numpy()
+    tb.append("   " + "전체".ljust(22) + "".join(f"{v:8.2f}" for v in (
+        np.percentile(allm, 25), np.percentile(allm, 50), np.percentile(allm, 75),
+        np.percentile(allm, 95), allm.mean())))
+    axes[1][2].text(0.0, 1.0, "\n".join(["minADE6 분포 [m]"] + tb), transform=axes[1][2].transAxes,
+                    va="top", ha="left", fontsize=7.8, family="Noto Sans Mono CJK KR", color=C.INK,
+                    linespacing=1.6, bbox=dict(boxstyle="round,pad=0.5", fc="white", ec=C.GRID, lw=0.8))
+    fig.suptitle("⑦ 군집별 분포 — 평균 막대가 가리는 폭", fontsize=14, x=0.015, ha="left")
+    fig.tight_layout(rect=[0, 0, 1, 0.955])
+    C.savefig(fig, out)
+    return stat
+
+
 def write_md(tag, kbest, rows, tot, stab, tree, picks, path):
     L = [f"# 상황 군집 요약 — {tag}", "",
          f"- val 24,988 · GMM K={kbest} (full covariance · 시드 {SEED}) · 특성 6개는 정답 쪽 상황 값만 쓴다",
@@ -525,12 +611,14 @@ def main():
     g3_metrics(rows, tot, out / "g3_metrics.png")
     g4_behavior(rows, tot, out / "g4_behavior.png")
     tree = g5_tree(X, lab, rows, out / "g5_tree.png")
+    box = g7_box(df, lab, rows, tot, out / "g7_box.png")
     picks = g6_cases(CS.Ctx(a.tag), df, lab, rows, out / "g6_cases.png")
     np.save(out / "labels.npy", lab)
     (out / "summary.json").write_text(json.dumps(
         {"tag": a.tag, "n": len(df), "k": kbest, "k_search": rows_k, "min_gain_nats": MIN_GAIN,
          "features": [{"col": c, "short": s, "desc": t} for c, s, t in FEATS], "scaling": scal,
-         "stability_ari": stab, "tree": tree, "overall": tot, "clusters": rows, "cases": picks},
+         "stability_ari": stab, "tree": tree, "overall": tot, "clusters": rows, "cases": picks,
+         "box": box},
         indent=2, ensure_ascii=False, default=float))
     write_md(a.tag, kbest, rows, tot, stab, tree, picks, out / "summary.md")
     print(f"[done] {out} — 그림 6장 · summary.json · summary.md", flush=True)
