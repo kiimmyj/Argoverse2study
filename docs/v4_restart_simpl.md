@@ -1,7 +1,7 @@
 # v4 종료와 SIMPL 기반 재시작
 
 > 2026-10-28. v4의 마지막 실험(100 epoch 최선구성) 결과와, 그에 따라 base architecture를 교체하기로 한 결정을 정리했음.
-> 1 epoch 실측은 진행 중이며 결과가 나오면 5절에 추가함.
+> 단일 GPU 1 epoch 실측 결과는 5.2절에 추가했음.
 
 ---
 
@@ -9,8 +9,9 @@
 
 1. **구성요소를 쌓는 방향이 막혔음** — 개별로 효과가 확인된 네 가지(smoothing · data cleansing · lane heading alignment · neighborhood vehicles)를 모두 적용하고 epoch을 3배로 늘렸더니 **기준보다 +0.045 나빠졌음**(5 seeds 전부)
 2. **구조적 병목을 측정했음** — 후보 경로 집합이 ground truth를 감싸는 정도가 이미 1 m 수준이라, loss·입력 tuning으로는 목표(minADE6 ≤ 1.0)에 닿지 않음
-3. **base architecture를 공개 SOTA로 교체하기로 했음** — 조사 결과 **SIMPL**(MIT, AV2 지원, 1.9M)을 선택했음
+3. **base architecture를 공개 SOTA로 교체하기로 했음** — 조사 결과 **SIMPL**(MIT, AV2 지원, AV2 설정 2.6M)을 선택했음
 4. v4의 원래 의도인 **(a, h) 입출력과 θ = h − k 표현은 유지**하되, 기준 차로 k를 후보 경로 열거에서 **최근접 차로**로 단순화했음
+5. **단일 GPU 1 epoch은 55분이고 병목은 IO가 아니라 GPU였음** — 공식 설정(50 epoch)을 그대로 따르면 약 45시간 걸림(5.2절)
 
 ---
 
@@ -108,7 +109,7 @@ mode를 후보 경로(candidate route)로 정의하는 현재 구조에서, **�
 1. **재현 정확도가 셋 중 가장 낮음** — 저자가 논문 checkpoint를 분실해 재학습한 공개 checkpoint가 val **0.777**임(논문 0.72). DeMo(0.645)보다 0.13 나쁨
 2. **작은 batch에서 성능이 크게 떨어짐** — 파생 모델(DGFNet) 저자가 단일 3090 batch 16에서 맞춘 LR schedule을 공개해 두었으므로 그것을 출발점으로 삼음
 3. **AV2 test 제출 코드가 없음** — val 평가만 가능함
-4. 공개된 학습 시간이 전부 multi-GPU임(8×3090 11시간). 단일 GPU 실측이 필요함 — 5절
+4. 공개된 학습 시간이 전부 multi-GPU임(8×3090 11시간). 단일 GPU로 실측하니 50 epoch에 약 45시간 걸림 — 5.2절
 
 ---
 
@@ -127,12 +128,37 @@ mode를 후보 경로(candidate route)로 정의하는 현재 구조에서, **�
 3. 3.1절에서 측정한 "오라클 경로 1.079 m" 병목도 함께 사라짐
 4. **대가** — off-lane penalty가 공짜가 아니게 됨. v4에서는 d가 상태 변수라 hinge 하나로 끝났으나, 최근접 차로 기준이면 매 step 다시 계산해야 함. 1차에서는 off-lane penalty를 제외하고 시작함
 
-### 5.2 1 epoch 실측 (진행 중)
+### 5.2 1 epoch 실측 (2026-10-28)
 
-1. 공개된 학습 시간이 전부 multi-GPU라 **단일 GPU 기준 epoch 시간을 모름**
-2. 세 후보 모두 scenario당 pickle 하나를 읽는 구조이고, DeMo에서 8 GPU 9시간 vs 2 GPU 10시간이 보고된 바 있어 **IO bound일 가능성이 높음** — 단일 GPU 시간이 단순 N배보다 훨씬 나을 수 있음
-3. 따라서 commit 전에 **전처리 + 1 epoch 실측**을 먼저 함
-4. 환경은 기존 `av2` conda 환경을 그대로 사용함 (torch 2.13.0+cu130, sm_120 지원 확인, av2-api 설치됨)
-5. 적용한 수정은 Python 3 호환 2건뿐임 — `from fractions import gcd` → `math.gcd`, `import imp` → `importlib`
+1. 공개된 학습 시간이 전부 multi-GPU라 **단일 GPU 기준 epoch 시간을 몰랐음**. scenario당 pickle 하나를 읽는 구조이고 DeMo에서 8 GPU 9시간 vs 2 GPU 10시간이 보고돼 있어 **IO bound일 것**으로 예상했음
+2. 그래서 commit 전에 전처리 + 1 epoch을 실측했음 — 단일 RTX PRO 4000 Blackwell(24 GB), SIMPL 기본 설정 그대로(batch 16, DataLoader workers 8, polyline LR), 다른 GPU 작업 없이 단독 실행
 
-**(실측 결과는 여기에 추가 예정)**
+| 항목 | 실측 |
+| --- | --- |
+| 전처리 val 24,988개 | 4분 (62 process) |
+| 전처리 train 199,908개 | 40분 — 캐시 크기 30 GB |
+| 1 epoch train (12,494 step) | **51.9분** (0.25 s/step) |
+| 1 epoch val | 2.7분 |
+| peak GPU memory | 10.5 GB (allocator 기준) · nvidia-smi 기준 최대 16.3 GB |
+| GPU 사용률 (2초 간격 1,640회) | 중앙값 **88%**, 96%의 시간이 50% 이상 |
+| 1 epoch 후 val | minADE6 **1.354** · minFDE6 2.894 · MR6 0.483 · brier-minFDE6 3.471 |
+
+1. **IO bound가 아니었음 — GPU가 병목임.** 데이터 로딩이 GPU를 굶겼다면 사용률이 낮게 깔렸어야 하는데, 학습 내내 88% 근처였음. 따라서 DataLoader workers를 늘려도 빨라지지 않음
+2. **하루에 50 epoch은 불가능함.** 공식 설정(50 epoch, val_interval 2 → val 37회)을 그대로 따르면 50 × 51.9분 + 37 × 2.7분 ≈ **45시간(약 1.9일)**. 24시간이면 약 27 epoch
+3. 공식 설정은 4 GPU × batch 16(실효 batch 64, epoch당 3,123 step)이라 단일 GPU batch 16과 **같은 학습이 아님**. 4.3절의 "작은 batch에서 성능 하락" risk가 그대로 남으므로 DGFNet의 단일 GPU용 LR schedule을 쓰는 계획은 유지함
+4. **1 epoch 만에 v4 기준과 같은 자리임.** LR이 warmup 시작값(1e-4, 최대치의 1/10)에 머문 1 epoch인데도 minADE6 1.354로, v4 기준 1.3591과 같음. 다만 지표 정의가 다름 — SIMPL은 **FDE가 가장 작은 mode의 ADE**(AV2 공식 정의), v4 harness는 **mode별 ADE의 최솟값**임. 앞쪽이 항상 같거나 크므로 v4 정의로 재면 1.354보다 낮아짐. 정확한 비교는 새 평가 harness에서 함
+5. 줄일 수 있는 후보(미측정) — mixed precision(bf16), batch 키우기(nvidia-smi 기준 여유 약 8 GB), 매 train step마다 CPU에서 도는 지표 계산 끄기
+
+**환경과 수정**
+
+1. 기존 `av2` conda 환경을 그대로 씀(torch 2.13.0+cu130). 빠져 있던 `shapely` 2.2.0, `tensorboard` 2.21.0만 추가 설치했고 기존 패키지 버전은 바뀌지 않았음
+2. SIMPL 코드 수정은 4건이고 모두 호환성 수정이라 학습 동작은 원본과 같음
+
+| 수정 | 이유 |
+| --- | --- |
+| `from fractions import gcd` → `math.gcd` | Python 3.9에서 제거됨 |
+| `import imp` → `importlib` (2개 파일) | import만 하고 쓰지 않음. Python 3.12에서 제거됨 |
+| `LRScheduler.__init__`에서 `verbose` 인자 제거 | torch 2.13에서 제거됨. 기본값이 False였으므로 동작 동일 |
+| evaluator가 쓰는 AV1 지표 함수 하나를 `utils/argo_eval_forecasting.py`로 원본 그대로 복사 | 원본이 AV1 API(`argoverse`)를 import함. AV1 API는 옛 의존성을 고정해 av2 환경을 깨뜨릴 수 있어 함수만 가져옴(MIT) |
+
+3. 실측 스크립트(`~/av2_simpl/run_prep_and_measure.sh`)에는 `--val_interval 1`을 붙였음 — 기본값 5이면 1 epoch 실행에서 val이 아예 돌지 않음
