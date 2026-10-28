@@ -1,0 +1,10 @@
+{
+ "sid": "07671046-47b1-4ec2-b365-b36982e879a4",
+ "idx": 683,
+ "theta_abs_mean_deg": 6.605940938425392,
+ "theta_abs_max_deg": 34.24414331291974,
+ "theta_abs_median_deg": 3.380853117764828,
+ "k_max_jump_deg_per_step": 14.066283466706885,
+ "head_net_deg": 92.53816723549215,
+ "k_net_deg": 95.75905806347978
+}
