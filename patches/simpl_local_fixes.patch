@@ -1,0 +1,317 @@
+From b6ed8b88c44ab84a178eaeec4fa972be911dd8c9 Mon Sep 17 00:00:00 2001
+From: kiimmyj <mobilityintelligencelab@gmail.com>
+Date: Thu, 29 Oct 2026 01:52:30 +0900
+Subject: [PATCH] =?UTF-8?q?=EC=9D=B4=20=EB=A8=B8=EC=8B=A0=EC=97=90?=
+ =?UTF-8?q?=EC=84=9C=20=EB=8F=8C=EC=95=84=EA=B0=80=EA=B2=8C=20=ED=95=98?=
+ =?UTF-8?q?=EB=8A=94=20=EC=88=98=EC=A0=95=20(=EB=A1=9C=EC=BB=AC=20?=
+ =?UTF-8?q?=EC=A0=84=EC=9A=A9,=20upstream=20=EC=97=90=20=EC=95=88=20?=
+ =?UTF-8?q?=EC=98=AC=EB=A6=BC)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- simpl/simpl.py: from fractions import gcd -> math.gcd (Py3.9 에서 제거됨)
+- utils/{utils,logger}.py: import imp -> importlib (Py3.12 에서 제거됨)
+- utils/optimizer.py: torch 2.13 에서 없어진 LRScheduler verbose 인자 제거
+- utils/evaluator.py + utils/argo_eval_forecasting.py: AV1 API 의존 지표 함수를 원본 그대로 복사
+- run_prep_and_measure.sh: 전처리 + 1에폭 실측 러너
+---
+ run_prep_and_measure.sh        |  55 ++++++++++++
+ simpl/simpl.py                 |   2 +-
+ utils/argo_eval_forecasting.py | 150 +++++++++++++++++++++++++++++++++
+ utils/evaluator.py             |   2 +-
+ utils/logger.py                |   2 +-
+ utils/optimizer.py             |   4 +-
+ utils/utils.py                 |   2 +-
+ 7 files changed, 211 insertions(+), 6 deletions(-)
+ create mode 100755 run_prep_and_measure.sh
+ create mode 100644 utils/argo_eval_forecasting.py
+
+diff --git a/run_prep_and_measure.sh b/run_prep_and_measure.sh
+new file mode 100755
+index 0000000..96c97e3
+--- /dev/null
++++ b/run_prep_and_measure.sh
+@@ -0,0 +1,55 @@
++#!/bin/bash
++# SIMPL 전처리 + 1에폭 실측 — 2026-10-28
++#
++# 하는 일
++#   1. AV2 val / train 전처리 (시나리오당 pickle 하나, /data/argoverse2/simpl_features/)
++#   2. 1에폭 학습을 돌려 단일 GPU 에폭 시간을 잰다
++#
++# 왜 실측하나 — 공개된 학습 시간이 전부 멀티 GPU(8x3090 11시간)다. 세 후보 모두
++# 시나리오당 pickle 하나를 읽는 구조라 IO 바운드일 가능성이 높고(DeMo: 8GPU 9시간 vs 2GPU 10시간),
++# 단일 GPU 시간이 단순 N배보다 훨씬 나을 수 있다. commit 전에 확인한다.
++#
++#   bash /home/user/av2_simpl/run_prep_and_measure.sh
++set -u
++cd /home/user/av2_simpl || exit 1
++PY=/home/user/miniforge3/envs/av2/bin/python
++DATA=/data/argoverse2/motion_forecasting
++FEAT=/data/argoverse2/simpl_features
++LOG=/home/user/av2_simpl/measure.log
++log () { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
++
++mkdir -p "$FEAT"
++: > "$LOG"
++log "환경: $($PY -c 'import torch;print(torch.__version__, torch.cuda.get_device_name(0))')"
++
++for split in val train; do
++  n_have=$(ls "$FEAT/$split" 2>/dev/null | wc -l)
++  n_want=$(ls "$DATA/$split" | wc -l)
++  if [ "$n_have" -ge "$n_want" ]; then
++    log "$split 전처리 이미 완료 ($n_have개) — 건너뜀"
++    continue
++  fi
++  log "$split 전처리 시작 (대상 $n_want개, 현재 $n_have개)"
++  t0=$(date +%s)
++  $PY -u data_av2/run_preprocess.py --mode "$split" --data_dir "$DATA/$split/" --save_dir "$FEAT/" 2>&1 | tail -3 | tee -a "$LOG"
++  log "$split 전처리 끝 — $(( ($(date +%s) - t0) / 60 ))분, 결과 $(ls "$FEAT/$split" | wc -l)개"
++done
++
++log "=== 1에폭 실측 시작 (단일 GPU)"
++# GPU 사용률 기록 — 낮게 깔리면 IO(데이터 로딩) 바운드라는 뜻
++nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 2 > /home/user/av2_simpl/gpu_1ep.csv &
++SMI_PID=$!
++t0=$(date +%s)
++# --val_interval 1: 기본값 5 이면 1에폭짜리 실행에서 검증이 아예 안 돈다(train.py 의 조건식)
++$PY -u train.py \
++  --features_dir "$FEAT/" \
++  --train_batch_size 16 \
++  --val_batch_size 16 \
++  --train_epoches 1 \
++  --val_interval 1 \
++  --use_cuda \
++  --data_aug \
++  --adv_cfg_path config.simpl_av2_cfg 2>&1 | tee /home/user/av2_simpl/train_1ep.log | tail -30 | tee -a "$LOG"
++kill $SMI_PID
++log "=== 1에폭 끝 — 총 $(( $(date +%s) - t0 ))초"
++log "로그: $LOG"
+diff --git a/simpl/simpl.py b/simpl/simpl.py
+index 9626a28..25e2b6a 100644
+--- a/simpl/simpl.py
++++ b/simpl/simpl.py
+@@ -4,7 +4,7 @@ import math
+ import numpy as np
+ import matplotlib.pyplot as plt
+ from matplotlib import cm
+-from fractions import gcd
++from math import gcd
+ #
+ import torch
+ from torch import Tensor, nn
+diff --git a/utils/argo_eval_forecasting.py b/utils/argo_eval_forecasting.py
+new file mode 100644
+index 0000000..e1fd73b
+--- /dev/null
++++ b/utils/argo_eval_forecasting.py
+@@ -0,0 +1,150 @@
++# Vendored from argoverse-api (AV1), argoverse/evaluation/eval_forecasting.py, lines 1-146 verbatim
++# except the unused `ArgoverseMap` import (only get_drivable_area_compliance needs it).
++# https://github.com/argoverse/argoverse-api — MIT license, Copyright 2019 Argo AI, LLC.
++# Why: utils/evaluator.py needs only this function, and installing argoverse-api into the
++# av2 env would pin old dependencies.
++# <Copyright 2019, Argo AI, LLC. Released under the MIT license.>
++
++"""This module evaluates the forecasted trajectories against the ground truth."""
++
++import math
++from typing import Dict, List, Optional
++
++import numpy as np
++
++
++LOW_PROB_THRESHOLD_FOR_METRICS = 0.05
++
++
++def get_ade(forecasted_trajectory: np.ndarray, gt_trajectory: np.ndarray) -> float:
++    """Compute Average Displacement Error.
++
++    Args:
++        forecasted_trajectory: Predicted trajectory with shape (pred_len x 2)
++        gt_trajectory: Ground truth trajectory with shape (pred_len x 2)
++
++    Returns:
++        ade: Average Displacement Error
++
++    """
++    pred_len = forecasted_trajectory.shape[0]
++    ade = float(
++        sum(
++            math.sqrt(
++                (forecasted_trajectory[i, 0] - gt_trajectory[i, 0]) ** 2
++                + (forecasted_trajectory[i, 1] - gt_trajectory[i, 1]) ** 2
++            )
++            for i in range(pred_len)
++        )
++        / pred_len
++    )
++    return ade
++
++
++def get_fde(forecasted_trajectory: np.ndarray, gt_trajectory: np.ndarray) -> float:
++    """Compute Final Displacement Error.
++
++    Args:
++        forecasted_trajectory: Predicted trajectory with shape (pred_len x 2)
++        gt_trajectory: Ground truth trajectory with shape (pred_len x 2)
++
++    Returns:
++        fde: Final Displacement Error
++
++    """
++    fde = math.sqrt(
++        (forecasted_trajectory[-1, 0] - gt_trajectory[-1, 0]) ** 2
++        + (forecasted_trajectory[-1, 1] - gt_trajectory[-1, 1]) ** 2
++    )
++    return fde
++
++
++def get_displacement_errors_and_miss_rate(
++    forecasted_trajectories: Dict[int, List[np.ndarray]],
++    gt_trajectories: Dict[int, np.ndarray],
++    max_guesses: int,
++    horizon: int,
++    miss_threshold: float,
++    forecasted_probabilities: Optional[Dict[int, List[float]]] = None,
++) -> Dict[str, float]:
++    """Compute min fde and ade for each sample.
++
++    Note: Both min_fde and min_ade values correspond to the trajectory which has minimum fde.
++    The Brier Score is defined here:
++        Brier, G. W. Verification of forecasts expressed in terms of probability. Monthly weather review, 1950.
++        https://journals.ametsoc.org/view/journals/mwre/78/1/1520-0493_1950_078_0001_vofeit_2_0_co_2.xml
++
++    Args:
++        forecasted_trajectories: Predicted top-k trajectory dict with key as seq_id and value as list of trajectories.
++                Each element of the list is of shape (pred_len x 2).
++        gt_trajectories: Ground Truth Trajectory dict with key as seq_id and values as trajectory of
++                shape (pred_len x 2)
++        max_guesses: Number of guesses allowed
++        horizon: Prediction horizon
++        miss_threshold: Distance threshold for the last predicted coordinate
++        forecasted_probabilities: Probabilites associated with forecasted trajectories.
++
++    Returns:
++        metric_results: Metric values for minADE, minFDE, MR, p-minADE, p-minFDE, p-MR, brier-minADE, brier-minFDE
++    """
++    metric_results: Dict[str, float] = {}
++    min_ade, prob_min_ade, brier_min_ade = [], [], []
++    min_fde, prob_min_fde, brier_min_fde = [], [], []
++    n_misses, prob_n_misses = [], []
++    for k, v in gt_trajectories.items():
++        curr_min_ade = float("inf")
++        curr_min_fde = float("inf")
++        min_idx = 0
++        max_num_traj = min(max_guesses, len(forecasted_trajectories[k]))
++
++        # If probabilities available, use the most likely trajectories, else use the first few
++        if forecasted_probabilities is not None:
++            sorted_idx = np.argsort([-x for x in forecasted_probabilities[k]], kind="stable")
++            # sorted_idx = np.argsort(forecasted_probabilities[k])[::-1]
++            pruned_probabilities = [forecasted_probabilities[k][t] for t in sorted_idx[:max_num_traj]]
++            # Normalize
++            prob_sum = sum(pruned_probabilities)
++            pruned_probabilities = [p / prob_sum for p in pruned_probabilities]
++        else:
++            sorted_idx = np.arange(len(forecasted_trajectories[k]))
++        pruned_trajectories = [forecasted_trajectories[k][t] for t in sorted_idx[:max_num_traj]]
++
++        for j in range(len(pruned_trajectories)):
++            fde = get_fde(pruned_trajectories[j][:horizon], v[:horizon])
++            if fde < curr_min_fde:
++                min_idx = j
++                curr_min_fde = fde
++        curr_min_ade = get_ade(pruned_trajectories[min_idx][:horizon], v[:horizon])
++        min_ade.append(curr_min_ade)
++        min_fde.append(curr_min_fde)
++        n_misses.append(curr_min_fde > miss_threshold)
++
++        if forecasted_probabilities is not None:
++            prob_n_misses.append(1.0 if curr_min_fde > miss_threshold else (1.0 - pruned_probabilities[min_idx]))
++            prob_min_ade.append(
++                min(
++                    -np.log(pruned_probabilities[min_idx]),
++                    -np.log(LOW_PROB_THRESHOLD_FOR_METRICS),
++                )
++                + curr_min_ade
++            )
++            brier_min_ade.append((1 - pruned_probabilities[min_idx]) ** 2 + curr_min_ade)
++            prob_min_fde.append(
++                min(
++                    -np.log(pruned_probabilities[min_idx]),
++                    -np.log(LOW_PROB_THRESHOLD_FOR_METRICS),
++                )
++                + curr_min_fde
++            )
++            brier_min_fde.append((1 - pruned_probabilities[min_idx]) ** 2 + curr_min_fde)
++
++    metric_results["minADE"] = sum(min_ade) / len(min_ade)
++    metric_results["minFDE"] = sum(min_fde) / len(min_fde)
++    metric_results["MR"] = sum(n_misses) / len(n_misses)
++    if forecasted_probabilities is not None:
++        metric_results["p-minADE"] = sum(prob_min_ade) / len(prob_min_ade)
++        metric_results["p-minFDE"] = sum(prob_min_fde) / len(prob_min_fde)
++        metric_results["p-MR"] = sum(prob_n_misses) / len(prob_n_misses)
++        metric_results["brier-minADE"] = sum(brier_min_ade) / len(brier_min_ade)
++        metric_results["brier-minFDE"] = sum(brier_min_fde) / len(brier_min_fde)
++    return metric_results
+diff --git a/utils/evaluator.py b/utils/evaluator.py
+index dc95b5c..0db7912 100644
+--- a/utils/evaluator.py
++++ b/utils/evaluator.py
+@@ -3,7 +3,7 @@ import os
+ import numpy as np
+ import torch
+ import matplotlib.pyplot as plt
+-from argoverse.evaluation.eval_forecasting import get_displacement_errors_and_miss_rate
++from utils.argo_eval_forecasting import get_displacement_errors_and_miss_rate
+ 
+ 
+ class TrajPredictionEvaluator():
+diff --git a/utils/logger.py b/utils/logger.py
+index bd48b15..a15e8db 100644
+--- a/utils/logger.py
++++ b/utils/logger.py
+@@ -1,4 +1,4 @@
+-import imp
++import importlib as imp
+ import os
+ import subprocess
+ import sys
+diff --git a/utils/optimizer.py b/utils/optimizer.py
+index dc35c3e..19a3b69 100644
+--- a/utils/optimizer.py
++++ b/utils/optimizer.py
+@@ -20,7 +20,7 @@ class PolylineLR(_LRScheduler):
+         self.milestones = milestones
+         self.values = values
+         self.n_intervals = len(self.milestones) - 1
+-        super(PolylineLR, self).__init__(optimizer, last_epoch, verbose)
++        super(PolylineLR, self).__init__(optimizer, last_epoch)  # torch>=2.7 removed verbose
+ 
+     def get_lr(self):
+         if not self._get_lr_called_within_step:
+@@ -49,7 +49,7 @@ class CosineAnnealingWithWarmupLR(_LRScheduler):
+         self.eta_min = eta_min
+         self.T_warmup = T_warmup
+         self.init_lr = optimizer.param_groups[0]['lr']
+-        super(CosineAnnealingWithWarmupLR, self).__init__(optimizer, last_epoch, verbose)
++        super(CosineAnnealingWithWarmupLR, self).__init__(optimizer, last_epoch)  # torch>=2.7 removed verbose
+ 
+     def get_lr(self):
+         if not self._get_lr_called_within_step:
+diff --git a/utils/utils.py b/utils/utils.py
+index d0dd1b1..54a291b 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -1,4 +1,4 @@
+-import imp
++import importlib as imp
+ import os
+ import random
+ import argparse
+-- 
+2.43.0
+
