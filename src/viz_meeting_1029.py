@@ -9,6 +9,7 @@
   m3_theta.png       θ = h − k 가 실제 장면에서 무엇인가 (모델 없이 데이터만)
   m4_rate.png        5 Hz 질문 — 길이는 답이 있고 레이트는 비어 있다
   m5_plan.png        SIMPL 파이프라인 검증과 실험 단계·비용
+  m6_rollout.png     예측 방식 — (a, Δθ) 적분기와 다른 모델의 출력 형태
 
   python viz_meeting_1029.py            # 다섯 장 전부
   python viz_meeting_1029.py --only m3  # 한 장만
@@ -475,12 +476,92 @@ def main():
     a = ap.parse_args()
     plt = C.setup_mpl()
     OUT.mkdir(parents=True, exist_ok=True)
-    todo = [a.only] if a.only else ["m1", "m2", "m3", "m4", "m5"]
+    todo = [a.only] if a.only else ["m1", "m2", "m3", "m4", "m5", "m6"]
     for name in todo:
         fn = globals()[name]
         p = fn(plt, a.sid) if name == "m3" else fn(plt)
         print(f"{name} → {p}")
 
+
+
+# ─────────────────────── m6 — 예측이 어떻게 이루어지나 (출력 방식 비교)
+
+def m6(plt):
+    import matplotlib.gridspec as gs
+    from matplotlib.patches import FancyBboxPatch
+
+    fig = plt.figure(figsize=(13.2, 5.4))
+    g = gs.GridSpec(3, 2, width_ratios=[1.05, 1], figure=fig, hspace=0.45, wspace=0.1)
+
+    # 왼쪽 — 적분기 흐름
+    ax = fig.add_subplot(g[:, 0]); ax.axis("off"); ax.grid(False)
+    ax.set_xlim(0, 10); ax.set_ylim(0, 10)
+
+    def box(y, txt, col, h=1.05, fs=9.0):
+        ax.add_patch(FancyBboxPatch((0.6, y - h / 2), 8.8, h, boxstyle="round,pad=0.12",
+                                    facecolor=col, edgecolor=C.AXIS, lw=1.0, zorder=2))
+        ax.text(5.0, y, txt, ha="center", va="center", fontsize=fs, color=C.INK, zorder=3)
+
+    def arrow(y1, y2):
+        ax.annotate("", xy=(5.0, y2), xytext=(5.0, y1),
+                    arrowprops=dict(arrowstyle="-|>", color=C.INK2, lw=1.4))
+
+    ax.text(0.6, 9.75, "디코더가 미래 60 스텝의 행동을 한 번에 낸다", fontsize=10.2,
+            color=C.INK, fontweight="bold", ha="left")
+    box(8.85, "(a, Δθ) × 60      ← 좌표가 아니라 행동", "#eaf1fb")
+    arrow(8.3, 7.75)
+    box(7.2, "a = 8.0·tanh(·)   [m/s²]          Δθ = 8°·tanh(·)   스텝당", "#f2f1ec", fs=8.6)
+    arrow(6.65, 6.1)
+    box(5.55, "v = relu(v0 + Σ a·dt) ≤ 40        θ = θ0 + Σ Δθ,  |θ| ≤ 90°", "#f2f1ec", fs=8.6)
+    arrow(5.0, 4.45)
+    box(3.75, "s = s0 + Σ v·cos θ·dt      차로를 따라 간 거리\n"
+              "d = d0 + Σ v·sin θ·dt      차로에서 옆으로 벗어난 거리", "#eafaf3", h=1.5, fs=8.8)
+    arrow(2.95, 2.4)
+    box(1.75, "(x, y) = P(s) + N(s)·d        중심선 위의 점 + 법선 방향 d", "#fdeee7", fs=8.8)
+
+    ax.text(0.6, 0.75, "· 순차 루프가 없다 — 전부 누적합이라 학습 경로 = 추론 경로\n"
+                       "   (exposure bias 가 구조적으로 0)\n"
+                       "· tanh·relu 가 가속도·요레이트·속도 부호를 전부 범위 안에 가둔다",
+            fontsize=8.4, color=C.INK2, va="top", ha="left")
+
+    # 오른쪽 — 같은 궤적을 세 가지 방식으로 낸다
+    t = np.linspace(0, 1, 60)
+    base = np.stack([t * 9.0, 2.2 * t ** 2], 1)
+    rng = np.random.default_rng(3)
+
+    def panel(row, title, note, col):
+        p = fig.add_subplot(g[row, 1])
+        p.plot(base[:, 0], base[:, 1], color=C.GRID, lw=5.0, solid_capstyle="round", zorder=1)
+        p.set_xlim(-0.8, 10.6); p.set_ylim(-1.3, 3.4)
+        p.set_xticks([]); p.set_yticks([]); p.grid(False)
+        p.set_title(title, loc="left", fontsize=9.4, color=col)
+        p.text(10.4, -1.15, note, ha="right", va="bottom", fontsize=8.0, color=C.INK2)
+        return p
+
+    p1 = panel(0, "좌표 60개를 직접 낸다 — QCNet · Forecast-MAE · DeMo",
+               "매끄러움·운동학 보장 없음", C.C_BLUE)
+    wob = base + np.stack([np.zeros(60), rng.normal(0, 0.16, 60)], 1)
+    p1.plot(wob[:, 0], wob[:, 1], "o", ms=3.0, color=C.C_BLUE, zorder=4)
+
+    p2 = panel(1, "Bezier 제어점 몇 개를 낸다 — SIMPL", "곡선은 매끄럽지만 운동학은 아님", C.C_ORANGE)
+    cp = np.array([[0, 0], [2.6, -0.25], [5.4, 0.5], [7.6, 1.5], [9.0, 2.2]])
+    p2.plot(cp[:, 0], cp[:, 1], "--", color=C.C_ORANGE, lw=1.0, alpha=0.6, zorder=3)
+    p2.plot(cp[:, 0], cp[:, 1], "s", ms=6.0, color=C.C_ORANGE, zorder=5)
+    p2.plot(base[:, 0], base[:, 1], color=C.C_ORANGE, lw=2.0, zorder=4)
+
+    p3 = panel(2, "(a, Δθ) 를 내고 적분한다 — 우리", "가속도·요레이트·속도 부호가 구조로 보장", C.C_GREEN)
+    p3.plot(base[:, 0], base[:, 1] - 0.55, ":", color=C.C_AQUA, lw=1.6, zorder=2)
+    p3.text(0.1, -1.25, "기준 차로", fontsize=7.6, color=C.C_AQUA, va="bottom")
+    for j in range(0, 60, 7):                                  # 스텝마다 행동 한 쌍
+        p3.annotate("", xy=(base[j, 0] + 0.75, base[j, 1] + 0.12 * (j / 60 + 0.4)),
+                    xytext=(base[j, 0], base[j, 1]),
+                    arrowprops=dict(arrowstyle="-|>", color=C.C_GREEN, lw=1.3), zorder=5)
+    p3.plot(base[:, 0], base[:, 1], color=C.C_GREEN, lw=2.0, zorder=4)
+
+    fig.suptitle("예측이 어떻게 이루어지나 — 우리만 좌표가 아니라 “행동”을 낸다",
+                 x=0.012, ha="left", fontsize=13.5, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    return C.savefig(fig, OUT / "m6_rollout.png")
 
 if __name__ == "__main__":
     main()
