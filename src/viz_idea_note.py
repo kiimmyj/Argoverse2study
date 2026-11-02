@@ -3,11 +3,11 @@
 왜 따로 만드나 — 미팅 그림(viz_meeting_1029.py)은 "결론을 전달"하는 용도라 수치가 앞에 선다.
 아이디어 노트는 처음 읽는 사람이 **생각의 갈래**를 따라올 수 있어야 하므로, 같은 기록을
 ① 계보도 ② 뒤집힌 주장 대조 ③ 지금 돌고 있는 실험의 상태 로 다시 접는다.
-새로 계산하는 것은 없다. n3 만 r0.log 를 그때그때 읽는다.
+새로 계산하는 것은 없다. n3 만 r0.log·r1.log 를 그때그때 읽는다.
 
   n1_idea_tree.png    아이디어 계보도 — 질문 하나에서 갈라진 근거·반론·실험
   n2_overturned.png   그럴듯했지만 측정으로 뒤집힌 주장 다섯
-  n3_r0_progress.png  R0(원본 SIMPL) 진행 — LR warmup 통과 여부와 목표선
+  n3_r0_progress.png  R0(원본 SIMPL) 결과 + R1((a,h)) 진행 — 같은 자로 겹쳐 본다
 
   python viz_idea_note.py            # 세 장 전부
   python viz_idea_note.py --only n3  # 한 장만
@@ -22,6 +22,7 @@ import viz_v4_common as C
 
 OUT = C.ROOT / "viz" / "idea_note"
 R0_LOG = Path("/home/user/av2_simpl/r0.log")
+R1_LOG = Path("/home/user/av2_simpl/r1.log")
 
 VERDICT = {                      # 판정 → (색, 글자)
     "live":  (C.C_GREEN,  "살아남음"),
@@ -170,12 +171,15 @@ def n2(plt):
 
 # ───────────────────────────────────────── n3 — R0 진행
 
-def read_r0():
-    """r0.log → 에폭별 (train loss, lr, train minADE6, val loss, val minADE6)."""
-    if not R0_LOG.exists():
+def read_log(path):
+    """학습 로그 → 에폭별 (train loss, lr, train minADE6, val loss, val minADE6).
+
+    R0·R1 은 로그 형식이 같다(입력만 다르다). 그래서 같은 파서로 읽어 같은 축에 겹친다.
+    """
+    if not path.exists():
         return []
     rows, cur = [], None
-    for ln in R0_LOG.read_text(errors="replace").splitlines():
+    for ln in path.read_text(errors="replace").splitlines():
         m = re.match(r"^Epoch (\d+)", ln)
         if m:
             cur = {"ep": int(m.group(1))}
@@ -199,8 +203,16 @@ def read_r0():
     return [r for r in rows if "tr" in r]
 
 
+def vals(rows):
+    """검증이 있는 에폭만 (에폭, val minADE6) 로 뽑는다."""
+    vi = [i for i, r in enumerate(rows) if "va_ade" in r]
+    return (np.array([rows[i]["ep"] for i in vi]),
+            np.array([rows[i]["va_ade"] for i in vi]))
+
+
 def n3(plt):
-    rows = read_r0()
+    rows = read_log(R0_LOG)
+    r1rows = read_log(R1_LOG)
     ep = np.array([r["ep"] for r in rows])
     tr = np.array([r["tr"] for r in rows])
     lr = np.array([r["lr"] for r in rows])
@@ -210,49 +222,83 @@ def n3(plt):
     vade = np.array([rows[i].get("va_ade", np.nan) for i in vi])
 
     fig, (ax, bx) = plt.subplots(1, 2, figsize=(13.4, 4.9))
-    xhi = ep[-1] + max(2.1, 0.42 * ep[-1])
+    xhi = ep[-1] + max(2.1, 0.17 * ep[-1])      # 끝점 라벨 자리만큼만 — 과하면 오른쪽이 빈다
 
     ax.plot(ep, tr, color=C.C_BLUE, marker="o", ms=4.2)
     ax.plot(vep, va, color=C.C_ORANGE, marker="s", ms=4.6)
     ax.text(ep[-1] + 0.15, tr[-1], " train 손실", va="center", fontsize=9, color=C.C_BLUE)
     ax.text(vep[-1] + 0.15, va[-1], " val 손실", va="center", fontsize=9, color=C.C_ORANGE)
     ax.set_xlabel("에폭"); ax.set_ylabel("손실")
-    ax.set_ylim(0.28, 0.48); ax.set_xlim(-0.35, xhi)
+    lo = min(tr[1:].min(), va.min())            # 에폭 0 의 1.52 는 빼고 자동 범위
+    ax.set_ylim(lo - 0.015, min(0.48, max(tr[1:].max(), va.max()) + 0.02))
+    ax.set_xlim(-0.35, xhi)
     cx = ax.twinx()
     cx.plot(ep, lr * 1e4, color=C.C_GREEN, marker="^", ms=4.0, lw=1.3, ls="--")
     cx.set_ylabel("학습률 [×1e-4]", color=C.C_GREEN)
     cx.set_ylim(0, 11.5); cx.grid(False)
     cx.tick_params(axis="y", colors=C.C_GREEN)
-    mid = len(ep) // 2
-    cx.text(ep[mid], lr[mid] * 1e4 + 0.5, "학습률", ha="center", va="bottom",
-            fontsize=9, color=C.C_GREEN)
     cx.axhline(10, color=C.C_GREEN, lw=0.8, ls=":", alpha=0.7)
-    cx.text(ep[-1] + 0.2, 10.0, " warmup 정점 1e-3", va="center", fontsize=8.4,
-            color=C.C_GREEN)
+    cx.text(ep[-1] * 0.60, 10.15, "warmup 정점 1e-3", va="bottom", ha="center",
+            fontsize=8.4, color=C.C_GREEN)
     ax.set_title("손실과 학습률 — warmup 정점을 통과했는가  (에폭 0 train 1.52 는 축 밖)")
 
     bx.plot(vep, vade, color=C.C_TOP, marker="o", ms=5.0, zorder=4)
-    for x, y in zip(vep, vade):
-        bx.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(0, 9),
-                    ha="center", fontsize=8.4, color=C.C_TOP)
-    bx.text(vep[-1] + 0.12, vade[-1], " R0 val minADE6", va="center", fontsize=9,
+    mark = {0, len(vep) - 1, int(np.nanargmin(vade))}        # 첫 점·마지막 점·최저점만 숫자를 단다
+    for i in mark:
+        bx.annotate(f"{vade[i]:.3f}", (vep[i], vade[i]), textcoords="offset points",
+                    xytext=(0, 10), ha="center", fontsize=8.6, color=C.C_TOP,
+                    fontweight="bold" if i == len(vep) - 1 else "normal")
+    dec = [i for i, r in enumerate(rows) if r.get("lr", 0) < 1e-3 and r["ep"] > 10]
+    if dec:                                                   # LR 감쇠 구간을 띠로 표시
+        bx.axvspan(rows[dec[0]]["ep"] - 0.5, rows[dec[-1]]["ep"] + 0.5,
+                   color=C.C_GREEN, alpha=0.07, zorder=0)
+        bx.text((rows[dec[0]]["ep"] + rows[dec[-1]]["ep"]) / 2, 0.625,
+                "LR 감쇠", ha="center", fontsize=8.2, color=C.C_GREEN)
+    bx.text(vep[-1] + 0.5, vade[-1], " R0 (원본 14채널)", va="center", fontsize=9,
             color=C.C_TOP)
+
+    r1ep, r1ade = vals(r1rows)                                # R1 — 같은 자, 같은 축
+    if len(r1ep):
+        bx.plot(r1ep, r1ade, color=C.C_ORANGE, marker="s", ms=5.0, zorder=5)
+        bx.text(0.015, 0.045, f"■ R1 ((a,h) 11채널) — 에폭 {r1rows[-1]['ep']} 진행 중",
+                transform=bx.transAxes, fontsize=8.8, color=C.C_ORANGE)
+        # 3점 대 25점이라 왼쪽 끝에 뭉친다. 겹치는 구간만 확대해 "아직 구별이 안 된다"를 보이게 한다.
+        ix = bx.inset_axes([0.53, 0.58, 0.44, 0.37])
+        ov = r1ep[-1]
+        k = vep <= ov
+        ix.plot(vep[k], vade[k], color=C.C_TOP, marker="o", ms=4.6)
+        ix.plot(r1ep, r1ade, color=C.C_ORANGE, marker="s", ms=4.6)
+        other = dict(zip(r1ep, r1ade))
+        for x, y, c in list(zip(vep[k], vade[k], [C.C_TOP] * int(k.sum()))) + \
+                       list(zip(r1ep, r1ade, [C.C_ORANGE] * len(r1ep))):
+            peer = other.get(x) if c == C.C_TOP else dict(zip(vep[k], vade[k])).get(x)
+            dy = 10 if peer is None or y >= peer else -15     # 위에 있는 쪽 숫자를 위로
+            ix.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(0, dy),
+                        ha="center", fontsize=7.8, color=c)
+        ix.set_xticks(list(r1ep)); ix.set_xlim(r1ep[0] - 0.5, ov + 0.5)
+        lo = min(vade[k].min(), r1ade.min()); hi = max(vade[k].max(), r1ade.max())
+        ix.set_ylim(lo - 0.09, hi + 0.09)
+        ix.tick_params(labelsize=7.6)
+        ix.set_title(f"겹치는 구간 확대 — 에폭 {r1ep[0]}~{ov}", fontsize=8.4, pad=3)
+        ix.set_facecolor("white"); ix.patch.set_alpha(0.96)
     for val, lab, col in ((1.0, "사용자 목표 ≤ 1.0", C.C_ORANGE),
                           (0.777, "배포 체크포인트 0.777 (우리가 재평가해 일치시킴)", C.C_GREEN),
                           (0.72, "논문 보고치 0.72 (체크포인트 분실)", C.MUTED)):
         bx.axhline(val, color=col, lw=1.1, ls="--")
-        bx.text(vep[0] + 0.1, val + 0.008, lab, va="bottom", ha="left",
-                fontsize=8.2, color=col)
+        bx.text(vep[0] + (0.17 * vep[-1] if val > 0.95 else 0.1), val + 0.008, lab,
+                va="bottom", ha="left", fontsize=8.2, color=col)
     bx.set_xlabel("에폭"); bx.set_ylabel("val minADE6 [m]")
     bx.set_ylim(0.6, 1.25)
-    bx.set_xlim(vep[0] - 0.4, vep[-1] + max(2.0, 0.42 * vep[-1]))
+    bx.set_xlim(vep[0] - 1.2, vep[-1] + max(2.0, 0.17 * vep[-1]))
     bx.set_title("정확도 — SIMPL 의 minADE 는 최소 FDE 모드의 ADE 라 보수적")
 
-    fig.suptitle(f"R0 (원본 SIMPL · 50에폭 예정) 진행 — 에폭 {ep[-1]} 까지",
+    tail = f" · R1 은 에폭 {r1rows[-1]['ep']} 진행 중" if r1rows else ""
+    fig.suptitle(f"R0 (원본 SIMPL · 50에폭 완료) 결과{tail} — 입력 말고 전부 같다",
                  fontsize=13.0, y=0.985, color=C.INK)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     C.savefig(fig, OUT / "n3_r0_progress.png")
-    print("  n3 rows:", [(r["ep"], r["tr"], r.get("va"), r.get("va_ade")) for r in rows])
+    print("  n3 R0:", [(r["ep"], r.get("va_ade")) for r in rows if "va_ade" in r])
+    print("  n3 R1:", [(r["ep"], r.get("va_ade")) for r in r1rows if "va_ade" in r])
 
 
 FIGS = {"n1": n1, "n2": n2, "n3": n3}
