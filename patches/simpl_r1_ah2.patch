@@ -179,6 +179,97 @@ index 6c11a98..5ea8cb2 100644
          act_feats = []
          for i in range(batch_size):
              traj_pos = trajs[i]['TRAJS_POS_OBS']
+diff --git a/tools/measure_fill_share.py b/tools/measure_fill_share.py
+new file mode 100644
+index 0000000..aa58115
+--- /dev/null
++++ b/tools/measure_fill_share.py
+@@ -0,0 +1,85 @@
++"""저속 보조(AV2 yaw fill)가 차지하는 step 비율 — 모집단을 명시해서 잰다.
++
++왜 이 스크립트가 따로 있나. 노트 §4-⑤ 의 65.3% 는 "1 m/s 미만" 기준이고, R1 이 실제로 쓰는
++임계는 0.5 다. 두 값을 같은 자로 재지 않으면 "임계를 낮춰도 보조 비율이 안 줄어든다"는
++§7-① 의 경고가 근거 없는 말이 된다. 모집단을 네 가지로 쪼개 함께 보고한다.
++
++  전체 step   — 모델이 실제로 먹는 것. padding_traj_nn 이 메운 결측 step 이 포함되고,
++                그 step 은 Δp = 0 이라 게이트가 반드시 걸린다.
++  유효 step   — PAD_OBS == 1 만. 패딩이 만든 인공적인 걸림을 뺀 수치.
++  focal       — 평가 대상 한 대. 노트의 옛 15.5% 와 같은 모집단.
++
++  python tools/measure_fill_share.py --n 400
++"""
++import argparse
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++from simpl import ah_feat
++from simpl.av2_dataset import AV2Dataset
++from utils.utils import from_numpy
++
++FEAT = "/data/argoverse2/simpl_features/val/"
++TYPES = ["차량", "보행자", "모터사이클", "자전거", "버스", "미확인", "정적/배경"]
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--n", type=int, default=400)
++    ap.add_argument("--thresholds", type=float, nargs="+", default=[0.5, 1.0])
++    a = ap.parse_args()
++
++    torch.set_num_threads(1)                     # 학습 워커와 CPU 를 다투지 않게
++    ds = AV2Dataset(FEAT, mode="val", verbose=False)
++    n = min(a.n, len(ds))
++    print(f"val {len(ds)}개 중 앞 {n}개 · trim={ah_feat.TRIM} (창 48 step)\n")
++
++    # [임계][모집단] 누적: (filled, total)
++    acc = {v: {k: np.zeros(2, dtype=np.int64) for k in ("all", "valid", "focal", "focal_valid")}
++           for v in a.thresholds}
++    by_type = {v: np.zeros((len(TYPES), 2), dtype=np.int64) for v in a.thresholds}
++
++    for i in range(n):
++        t = from_numpy([ds[i]])[0]["TRAJS"]
++        pos = t["TRAJS_POS_OBS"].float()
++        ang = t["TRAJS_ANG_OBS"].float()
++        yaw = torch.atan2(ang[..., 1], ang[..., 0])
++        pad = t["PAD_OBS"][:, ah_feat.TRIM:].bool().numpy()        # [N,48]
++        # 트랙 유형: 결측 step 은 전부 0 행이므로 시간축 최대로 트랙 단위 유형을 뽑는다
++        typ = t["TRAJS_TYPE"].numpy().max(axis=1).argmax(axis=1)   # [N]
++
++        for v in a.thresholds:
++            _, _, src = ah_feat.speed_and_heading(pos, yaw, v_min=v)
++            fil = (src[:, ah_feat.TRIM:] == 2).numpy()             # [N,48] True = 보조
++            acc[v]["all"] += [fil.sum(), fil.size]
++            acc[v]["valid"] += [(fil & pad).sum(), pad.sum()]
++            acc[v]["focal"] += [fil[0].sum(), fil[0].size]
++            acc[v]["focal_valid"] += [(fil[0] & pad[0]).sum(), pad[0].sum()]
++            for k in range(len(TYPES)):
++                m = typ == k
++                if m.any():
++                    by_type[v][k] += [fil[m].sum(), fil[m].size]
++
++    for v in a.thresholds:
++        print(f"=== V_MIN = {v} m/s ===")
++        print(f"{'모집단':<16}{'보조 비율':>10}{'보조 step':>14}{'전체 step':>14}")
++        for k, lab in (("all", "전체 agent"), ("valid", "전체·유효만"),
++                       ("focal", "focal"), ("focal_valid", "focal·유효만")):
++            f, tot = acc[v][k]
++            print(f"{lab:<16}{100*f/tot:>9.1f}%{f:>14,}{tot:>14,}")
++        print(f"\n{'유형(전체 step)':<16}{'보조 비율':>10}{'전체 step':>14}")
++        for k, lab in enumerate(TYPES):
++            f, tot = by_type[v][k]
++            if tot:
++                print(f"{lab:<16}{100*f/tot:>9.1f}%{tot:>14,}")
++        print()
++
++
++if __name__ == "__main__":
++    main()
 diff --git a/tools/verify_ah2.py b/tools/verify_ah2.py
 new file mode 100644
 index 0000000..b3aacd4
