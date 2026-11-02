@@ -1,0 +1,347 @@
+=== R0 시작 2026-10-29 10:05:46 · git b6ed8b8 ===
+[Logger] 20261029-100547 - logger enable_flags: {'writer': True}
+Args: Namespace(mode='train', features_dir='/data/argoverse2/simpl_features/', train_batch_size=16, val_batch_size=16, train_epoches=50, val_interval=2, data_aug=True, seed=42, use_cuda=True, logger_writer=True, adv_cfg_path='config.simpl_av2_cfg', rank_metric='brier_fde_k', resume=False, no_pbar=True, model_path=None)
+
+Project Path: /home/user/av2_simpl
+Datetime: 20261029-100547
+
+Commit Msg: commit b6ed8b88c44ab84a178eaeec4fa972be911dd8c9
+Author: kiimmyj <mobilityintelligencelab@gmail.com>
+Date:   Thu Oct 29 01:52:30 2026 +0900
+
+    이 머신에서 돌아가게 하는 수정 (로컬 전용, upstream 에 안 올림)
+    
+    - simpl/simpl.py: from fractions import gcd -> math.gcd (Py3.9 에서 제거됨)
+    - utils/{utils,logger}.py: import imp -> importlib (Py3.12 에서 제거됨)
+    - utils/optimizer.py: torch 2.13 에서 없어진 LRScheduler verbose 인자 제거
+    - utils/evaluator.py + utils/argo_eval_forecasting.py: AV1 API 의존 지표 함수를 원본 그대로 복사
+    - run_prep_and_measure.sh: 전처리 + 1에폭 실측 러너
+
+======================================
+
+[Loader] load adv_cfg from config.simpl_av2_cfg
+[Loader] load dataset AV2Dataset from simpl.av2_dataset
+[Dataset] preparing /data/argoverse2/simpl_features/train/
+[Dataset] Dataset Info:
+-- mode:  train
+-- total frames:  199908
+-- obs_len:  50
+-- pred_len:  60
+-- seq_len:  110
+-- aug:  True
+[Dataset] preparing /data/argoverse2/simpl_features/val/
+[Dataset] Dataset Info:
+-- mode:  val
+-- total frames:  24988
+-- obs_len:  50
+-- pred_len:  60
+-- seq_len:  110
+-- aug:  False
+[Loader] load network Simpl from simpl.simpl
+[Loader] network params:
+-- total: 2646481
+-- pred_net 416785
+-- fusion_net 813696
+-- actor_net 1246144
+-- lane_net 169856
+[Loader] loading loss LossFunc from simpl.av2_loss_fn
+
+Epoch 0
+[Training] Avg. loss: 1.51574, time cost: 52.1 mins, lr: 0.0001, peak mem: 10520 MB
+-- minade_1: 6.746 minfde_1: 16.233 mr_1: 0.825 brier_fde_1: 16.233 minade_k: 4.596 minfde_k: 10.830 mr_k: 0.620 brier_fde_k: 11.417 
+
+Epoch 1
+[Training] Avg. loss: 0.414284, time cost: 50.2 mins, lr: 0.00028, peak mem: 10464 MB
+-- minade_1: 3.336 minfde_1: 8.548 mr_1: 0.781 brier_fde_1: 8.548 minade_k: 1.314 minfde_k: 2.690 mr_k: 0.454 brier_fde_k: 3.286 
+[Validation] Avg. loss: 0.370663, time cost: 2.67 mins
+-- minade_1: 2.915 minfde_1: 7.673 mr_1: 0.762 brier_fde_1: 7.673 minade_k: 1.175 minfde_k: 2.409 mr_k: 0.400 brier_fde_k: 3.000 
+
+Epoch 2
+[Training] Avg. loss: 0.379509, time cost: 51.5 mins, lr: 0.00046, peak mem: 11038 MB
+-- minade_1: 3.124 minfde_1: 8.069 mr_1: 0.770 brier_fde_1: 8.069 minade_k: 1.201 minfde_k: 2.406 mr_k: 0.406 brier_fde_k: 3.014 
+
+Epoch 3
+[Training] Avg. loss: 0.358633, time cost: 52.1 mins, lr: 0.00064, peak mem: 11011 MB
+-- minade_1: 2.990 minfde_1: 7.789 mr_1: 0.760 brier_fde_1: 7.789 minade_k: 1.137 minfde_k: 2.258 mr_k: 0.375 brier_fde_k: 2.872 
+[Validation] Avg. loss: 0.327595, time cost: 2.44 mins
+-- minade_1: 2.785 minfde_1: 7.359 mr_1: 0.741 brier_fde_1: 7.359 minade_k: 1.051 minfde_k: 2.092 mr_k: 0.353 brier_fde_k: 2.702 
+
+Epoch 4
+[Training] Avg. loss: 0.343086, time cost: 50.5 mins, lr: 0.00082, peak mem: 11280 MB
+-- minade_1: 2.915 minfde_1: 7.652 mr_1: 0.755 brier_fde_1: 7.652 minade_k: 1.098 minfde_k: 2.167 mr_k: 0.355 brier_fde_k: 2.791 
+
+Epoch 5
+[Training] Avg. loss: 0.333678, time cost: 50.2 mins, lr: 0.001, peak mem: 10548 MB
+-- minade_1: 2.894 minfde_1: 7.645 mr_1: 0.755 brier_fde_1: 7.645 minade_k: 1.072 minfde_k: 2.116 mr_k: 0.343 brier_fde_k: 2.742 
+[Validation] Avg. loss: 0.320042, time cost: 2.62 mins
+-- minade_1: 3.354 minfde_1: 8.829 mr_1: 0.809 brier_fde_1: 8.829 minade_k: 1.032 minfde_k: 2.023 mr_k: 0.322 brier_fde_k: 2.714 
+
+Epoch 6
+[Training] Avg. loss: 0.320014, time cost: 52.6 mins, lr: 0.001, peak mem: 10350 MB
+-- minade_1: 2.787 minfde_1: 7.410 mr_1: 0.744 brier_fde_1: 7.410 minade_k: 1.029 minfde_k: 2.021 mr_k: 0.323 brier_fde_k: 2.648 
+
+Epoch 7
+[Training] Avg. loss: 0.311951, time cost: 52.2 mins, lr: 0.001, peak mem: 11046 MB
+-- minade_1: 2.728 minfde_1: 7.276 mr_1: 0.739 brier_fde_1: 7.276 minade_k: 1.005 minfde_k: 1.968 mr_k: 0.313 brier_fde_k: 2.596 
+[Validation] Avg. loss: 0.325056, time cost: 2.83 mins
+-- minade_1: 2.593 minfde_1: 6.973 mr_1: 0.732 brier_fde_1: 6.973 minade_k: 1.047 minfde_k: 2.100 mr_k: 0.353 brier_fde_k: 2.706 
+
+Epoch 8
+[Training] Avg. loss: 0.304969, time cost: 56.3 mins, lr: 0.001, peak mem: 10947 MB
+-- minade_1: 2.657 minfde_1: 7.099 mr_1: 0.733 brier_fde_1: 7.099 minade_k: 0.982 minfde_k: 1.915 mr_k: 0.302 brier_fde_k: 2.543 
+
+Epoch 9
+[Training] Avg. loss: 0.301153, time cost: 53.1 mins, lr: 0.001, peak mem: 11344 MB
+-- minade_1: 2.623 minfde_1: 7.026 mr_1: 0.729 brier_fde_1: 7.026 minade_k: 0.973 minfde_k: 1.898 mr_k: 0.299 brier_fde_k: 2.527 
+[Validation] Avg. loss: 0.298471, time cost: 2.83 mins
+-- minade_1: 2.620 minfde_1: 7.076 mr_1: 0.719 brier_fde_1: 7.076 minade_k: 0.963 minfde_k: 1.873 mr_k: 0.297 brier_fde_k: 2.499 
+
+Epoch 10
+[Training] Avg. loss: 0.296745, time cost: 53.6 mins, lr: 0.001, peak mem: 10356 MB
+-- minade_1: 2.574 minfde_1: 6.912 mr_1: 0.725 brier_fde_1: 6.912 minade_k: 0.958 minfde_k: 1.864 mr_k: 0.292 brier_fde_k: 2.493 
+Save the model to saved_models/20261029-100547_Simpl_ckpt_epoch10.tar
+
+Epoch 11
+[Training] Avg. loss: 0.294185, time cost: 55.9 mins, lr: 0.001, peak mem: 10291 MB
+-- minade_1: 2.545 minfde_1: 6.839 mr_1: 0.721 brier_fde_1: 6.839 minade_k: 0.953 minfde_k: 1.855 mr_k: 0.290 brier_fde_k: 2.483 
+[Validation] Avg. loss: 0.291558, time cost: 2.58 mins
+-- minade_1: 2.713 minfde_1: 7.362 mr_1: 0.755 brier_fde_1: 7.362 minade_k: 0.948 minfde_k: 1.840 mr_k: 0.278 brier_fde_k: 2.512 
+
+Epoch 12
+[Training] Avg. loss: 0.291244, time cost: 55.0 mins, lr: 0.001, peak mem: 11410 MB
+-- minade_1: 2.519 minfde_1: 6.778 mr_1: 0.719 brier_fde_1: 6.778 minade_k: 0.942 minfde_k: 1.827 mr_k: 0.283 brier_fde_k: 2.455 
+
+Epoch 13
+[Training] Avg. loss: 0.288456, time cost: 55.0 mins, lr: 0.001, peak mem: 10894 MB
+-- minade_1: 2.493 minfde_1: 6.715 mr_1: 0.717 brier_fde_1: 6.715 minade_k: 0.933 minfde_k: 1.805 mr_k: 0.280 brier_fde_k: 2.432 
+[Validation] Avg. loss: 0.281396, time cost: 2.55 mins
+-- minade_1: 2.409 minfde_1: 6.530 mr_1: 0.700 brier_fde_1: 6.530 minade_k: 0.909 minfde_k: 1.746 mr_k: 0.269 brier_fde_k: 2.380 
+
+Epoch 14
+[Training] Avg. loss: 0.286328, time cost: 54.9 mins, lr: 0.001, peak mem: 10476 MB
+-- minade_1: 2.468 minfde_1: 6.645 mr_1: 0.711 brier_fde_1: 6.645 minade_k: 0.927 minfde_k: 1.794 mr_k: 0.276 brier_fde_k: 2.422 
+
+Epoch 15
+[Training] Avg. loss: 0.284439, time cost: 53.1 mins, lr: 0.001, peak mem: 11453 MB
+-- minade_1: 2.439 minfde_1: 6.576 mr_1: 0.710 brier_fde_1: 6.576 minade_k: 0.921 minfde_k: 1.780 mr_k: 0.274 brier_fde_k: 2.406 
+[Validation] Avg. loss: 0.287467, time cost: 2.61 mins
+-- minade_1: 2.554 minfde_1: 6.814 mr_1: 0.744 brier_fde_1: 6.814 minade_k: 0.928 minfde_k: 1.776 mr_k: 0.264 brier_fde_k: 2.422 
+
+Epoch 16
+[Training] Avg. loss: 0.281911, time cost: 55.0 mins, lr: 0.001, peak mem: 11625 MB
+-- minade_1: 2.414 minfde_1: 6.509 mr_1: 0.707 brier_fde_1: 6.509 minade_k: 0.914 minfde_k: 1.766 mr_k: 0.270 brier_fde_k: 2.392 
+
+Epoch 17
+[Training] Avg. loss: 0.280252, time cost: 51.6 mins, lr: 0.001, peak mem: 10736 MB
+-- minade_1: 2.411 minfde_1: 6.513 mr_1: 0.707 brier_fde_1: 6.513 minade_k: 0.909 minfde_k: 1.753 mr_k: 0.268 brier_fde_k: 2.380 
+[Validation] Avg. loss: 0.275699, time cost: 2.53 mins
+-- minade_1: 2.423 minfde_1: 6.612 mr_1: 0.714 brier_fde_1: 6.612 minade_k: 0.887 minfde_k: 1.707 mr_k: 0.257 brier_fde_k: 2.352 
+
+Epoch 18
+[Training] Avg. loss: 0.278325, time cost: 53.3 mins, lr: 0.001, peak mem: 10654 MB
+-- minade_1: 2.403 minfde_1: 6.492 mr_1: 0.706 brier_fde_1: 6.492 minade_k: 0.904 minfde_k: 1.746 mr_k: 0.268 brier_fde_k: 2.372 
+
+Epoch 19
+[Training] Avg. loss: 0.278129, time cost: 54.8 mins, lr: 0.001, peak mem: 10382 MB
+-- minade_1: 2.381 minfde_1: 6.440 mr_1: 0.704 brier_fde_1: 6.440 minade_k: 0.903 minfde_k: 1.744 mr_k: 0.266 brier_fde_k: 2.370 
+[Validation] Avg. loss: 0.277755, time cost: 2.75 mins
+-- minade_1: 2.370 minfde_1: 6.416 mr_1: 0.695 brier_fde_1: 6.416 minade_k: 0.891 minfde_k: 1.697 mr_k: 0.263 brier_fde_k: 2.317 
+
+Epoch 20
+[Training] Avg. loss: 0.277234, time cost: 53.5 mins, lr: 0.001, peak mem: 11074 MB
+-- minade_1: 2.375 minfde_1: 6.422 mr_1: 0.703 brier_fde_1: 6.422 minade_k: 0.898 minfde_k: 1.729 mr_k: 0.262 brier_fde_k: 2.355 
+Save the model to saved_models/20261029-100547_Simpl_ckpt_epoch20.tar
+
+Epoch 21
+[Training] Avg. loss: 0.275158, time cost: 52.1 mins, lr: 0.001, peak mem: 10318 MB
+-- minade_1: 2.359 minfde_1: 6.386 mr_1: 0.702 brier_fde_1: 6.386 minade_k: 0.893 minfde_k: 1.722 mr_k: 0.262 brier_fde_k: 2.346 
+[Validation] Avg. loss: 0.276838, time cost: 2.9 mins
+-- minade_1: 2.466 minfde_1: 6.604 mr_1: 0.710 brier_fde_1: 6.604 minade_k: 0.902 minfde_k: 1.716 mr_k: 0.271 brier_fde_k: 2.338 
+
+Epoch 22
+[Training] Avg. loss: 0.274416, time cost: 51.3 mins, lr: 0.001, peak mem: 10349 MB
+-- minade_1: 2.361 minfde_1: 6.388 mr_1: 0.703 brier_fde_1: 6.388 minade_k: 0.893 minfde_k: 1.721 mr_k: 0.262 brier_fde_k: 2.346 
+
+Epoch 23
+[Training] Avg. loss: 0.273374, time cost: 53.1 mins, lr: 0.001, peak mem: 10661 MB
+-- minade_1: 2.359 minfde_1: 6.390 mr_1: 0.703 brier_fde_1: 6.390 minade_k: 0.887 minfde_k: 1.706 mr_k: 0.257 brier_fde_k: 2.335 
+[Validation] Avg. loss: 0.274052, time cost: 2.91 mins
+-- minade_1: 2.431 minfde_1: 6.575 mr_1: 0.704 brier_fde_1: 6.575 minade_k: 0.892 minfde_k: 1.713 mr_k: 0.260 brier_fde_k: 2.348 
+
+Epoch 24
+[Training] Avg. loss: 0.271867, time cost: 53.8 mins, lr: 0.001, peak mem: 10836 MB
+-- minade_1: 2.347 minfde_1: 6.367 mr_1: 0.700 brier_fde_1: 6.367 minade_k: 0.884 minfde_k: 1.702 mr_k: 0.256 brier_fde_k: 2.329 
+
+Epoch 25
+[Training] Avg. loss: 0.271215, time cost: 53.6 mins, lr: 0.001, peak mem: 10735 MB
+-- minade_1: 2.337 minfde_1: 6.337 mr_1: 0.698 brier_fde_1: 6.337 minade_k: 0.881 minfde_k: 1.696 mr_k: 0.256 brier_fde_k: 2.322 
+[Validation] Avg. loss: 0.273773, time cost: 2.57 mins
+-- minade_1: 2.228 minfde_1: 6.077 mr_1: 0.689 brier_fde_1: 6.077 minade_k: 0.889 minfde_k: 1.727 mr_k: 0.259 brier_fde_k: 2.354 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.354, epoch: 25
+
+Epoch 26
+[Training] Avg. loss: 0.270473, time cost: 53.4 mins, lr: 0.001, peak mem: 12340 MB
+-- minade_1: 2.334 minfde_1: 6.330 mr_1: 0.697 brier_fde_1: 6.330 minade_k: 0.879 minfde_k: 1.692 mr_k: 0.254 brier_fde_k: 2.318 
+[Validation] Avg. loss: 0.271507, time cost: 2.69 mins
+-- minade_1: 2.397 minfde_1: 6.437 mr_1: 0.717 brier_fde_1: 6.437 minade_k: 0.875 minfde_k: 1.670 mr_k: 0.238 brier_fde_k: 2.303 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.303, epoch: 26
+
+Epoch 27
+[Training] Avg. loss: 0.269017, time cost: 50.8 mins, lr: 0.001, peak mem: 10790 MB
+-- minade_1: 2.317 minfde_1: 6.282 mr_1: 0.698 brier_fde_1: 6.282 minade_k: 0.874 minfde_k: 1.678 mr_k: 0.251 brier_fde_k: 2.306 
+[Validation] Avg. loss: 0.265924, time cost: 2.54 mins
+-- minade_1: 2.419 minfde_1: 6.575 mr_1: 0.711 brier_fde_1: 6.575 minade_k: 0.857 minfde_k: 1.637 mr_k: 0.246 brier_fde_k: 2.275 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.275, epoch: 27
+
+Epoch 28
+[Training] Avg. loss: 0.269187, time cost: 53.7 mins, lr: 0.001, peak mem: 10638 MB
+-- minade_1: 2.317 minfde_1: 6.296 mr_1: 0.698 brier_fde_1: 6.296 minade_k: 0.874 minfde_k: 1.678 mr_k: 0.251 brier_fde_k: 2.305 
+[Validation] Avg. loss: 0.280168, time cost: 2.48 mins
+-- minade_1: 2.372 minfde_1: 6.362 mr_1: 0.706 brier_fde_1: 6.362 minade_k: 0.912 minfde_k: 1.758 mr_k: 0.246 brier_fde_k: 2.386 
+
+Epoch 29
+[Training] Avg. loss: 0.268395, time cost: 53.1 mins, lr: 0.001, peak mem: 12725 MB
+-- minade_1: 2.315 minfde_1: 6.289 mr_1: 0.695 brier_fde_1: 6.289 minade_k: 0.873 minfde_k: 1.676 mr_k: 0.251 brier_fde_k: 2.304 
+[Validation] Avg. loss: 0.266925, time cost: 2.62 mins
+-- minade_1: 2.281 minfde_1: 6.189 mr_1: 0.686 brier_fde_1: 6.189 minade_k: 0.870 minfde_k: 1.647 mr_k: 0.243 brier_fde_k: 2.272 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.272, epoch: 29
+
+Epoch 30
+[Training] Avg. loss: 0.266998, time cost: 52.7 mins, lr: 0.001, peak mem: 11161 MB
+-- minade_1: 2.310 minfde_1: 6.274 mr_1: 0.697 brier_fde_1: 6.274 minade_k: 0.867 minfde_k: 1.666 mr_k: 0.248 brier_fde_k: 2.296 
+[Validation] Avg. loss: 0.272707, time cost: 2.48 mins
+-- minade_1: 2.328 minfde_1: 6.337 mr_1: 0.701 brier_fde_1: 6.337 minade_k: 0.889 minfde_k: 1.732 mr_k: 0.258 brier_fde_k: 2.373 
+Save the model to saved_models/20261029-100547_Simpl_ckpt_epoch30.tar
+
+Epoch 31
+[Training] Avg. loss: 0.266199, time cost: 54.2 mins, lr: 0.001, peak mem: 11143 MB
+-- minade_1: 2.310 minfde_1: 6.281 mr_1: 0.696 brier_fde_1: 6.281 minade_k: 0.866 minfde_k: 1.664 mr_k: 0.250 brier_fde_k: 2.292 
+[Validation] Avg. loss: 0.264953, time cost: 2.51 mins
+-- minade_1: 2.287 minfde_1: 6.228 mr_1: 0.683 brier_fde_1: 6.228 minade_k: 0.856 minfde_k: 1.637 mr_k: 0.248 brier_fde_k: 2.259 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.259, epoch: 31
+
+Epoch 32
+[Training] Avg. loss: 0.265892, time cost: 53.9 mins, lr: 0.001, peak mem: 11013 MB
+-- minade_1: 2.305 minfde_1: 6.271 mr_1: 0.696 brier_fde_1: 6.271 minade_k: 0.865 minfde_k: 1.661 mr_k: 0.248 brier_fde_k: 2.288 
+[Validation] Avg. loss: 0.266522, time cost: 2.65 mins
+-- minade_1: 2.245 minfde_1: 6.093 mr_1: 0.685 brier_fde_1: 6.093 minade_k: 0.853 minfde_k: 1.625 mr_k: 0.250 brier_fde_k: 2.249 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.249, epoch: 32
+
+Epoch 33
+[Training] Avg. loss: 0.26614, time cost: 53.3 mins, lr: 0.001, peak mem: 10147 MB
+-- minade_1: 2.303 minfde_1: 6.269 mr_1: 0.696 brier_fde_1: 6.269 minade_k: 0.866 minfde_k: 1.663 mr_k: 0.248 brier_fde_k: 2.291 
+[Validation] Avg. loss: 0.267118, time cost: 2.66 mins
+-- minade_1: 2.255 minfde_1: 6.143 mr_1: 0.694 brier_fde_1: 6.143 minade_k: 0.859 minfde_k: 1.656 mr_k: 0.240 brier_fde_k: 2.300 
+
+Epoch 34
+[Training] Avg. loss: 0.26524, time cost: 50.5 mins, lr: 0.001, peak mem: 11968 MB
+-- minade_1: 2.296 minfde_1: 6.247 mr_1: 0.696 brier_fde_1: 6.247 minade_k: 0.864 minfde_k: 1.662 mr_k: 0.246 brier_fde_k: 2.291 
+[Validation] Avg. loss: 0.270265, time cost: 2.61 mins
+-- minade_1: 2.256 minfde_1: 6.132 mr_1: 0.697 brier_fde_1: 6.132 minade_k: 0.877 minfde_k: 1.699 mr_k: 0.253 brier_fde_k: 2.326 
+
+Epoch 35
+[Training] Avg. loss: 0.265003, time cost: 54.5 mins, lr: 0.001, peak mem: 10195 MB
+-- minade_1: 2.306 minfde_1: 6.277 mr_1: 0.698 brier_fde_1: 6.277 minade_k: 0.863 minfde_k: 1.661 mr_k: 0.247 brier_fde_k: 2.291 
+[Validation] Avg. loss: 0.266999, time cost: 2.79 mins
+-- minade_1: 2.232 minfde_1: 6.043 mr_1: 0.688 brier_fde_1: 6.043 minade_k: 0.861 minfde_k: 1.647 mr_k: 0.240 brier_fde_k: 2.272 
+
+Epoch 36
+[Training] Avg. loss: 0.259128, time cost: 53.9 mins, lr: 0.00082, peak mem: 11154 MB
+-- minade_1: 2.252 minfde_1: 6.149 mr_1: 0.692 brier_fde_1: 6.149 minade_k: 0.842 minfde_k: 1.615 mr_k: 0.238 brier_fde_k: 2.243 
+[Validation] Avg. loss: 0.260062, time cost: 2.58 mins
+-- minade_1: 2.330 minfde_1: 6.350 mr_1: 0.701 brier_fde_1: 6.350 minade_k: 0.837 minfde_k: 1.590 mr_k: 0.232 brier_fde_k: 2.230 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.23, epoch: 36
+
+Epoch 37
+[Training] Avg. loss: 0.254174, time cost: 53.7 mins, lr: 0.00064, peak mem: 10682 MB
+-- minade_1: 2.221 minfde_1: 6.077 mr_1: 0.686 brier_fde_1: 6.077 minade_k: 0.828 minfde_k: 1.585 mr_k: 0.232 brier_fde_k: 2.212 
+[Validation] Avg. loss: 0.259524, time cost: 2.68 mins
+-- minade_1: 2.291 minfde_1: 6.322 mr_1: 0.713 brier_fde_1: 6.322 minade_k: 0.833 minfde_k: 1.565 mr_k: 0.225 brier_fde_k: 2.214 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.214, epoch: 37
+
+Epoch 38
+[Training] Avg. loss: 0.248943, time cost: 54.5 mins, lr: 0.00046, peak mem: 11705 MB
+-- minade_1: 2.171 minfde_1: 5.955 mr_1: 0.679 brier_fde_1: 5.955 minade_k: 0.809 minfde_k: 1.544 mr_k: 0.223 brier_fde_k: 2.171 
+[Validation] Avg. loss: 0.255314, time cost: 2.65 mins
+-- minade_1: 2.149 minfde_1: 5.872 mr_1: 0.674 brier_fde_1: 5.872 minade_k: 0.823 minfde_k: 1.569 mr_k: 0.229 brier_fde_k: 2.195 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.195, epoch: 38
+
+Epoch 39
+[Training] Avg. loss: 0.244002, time cost: 52.0 mins, lr: 0.00028, peak mem: 10407 MB
+-- minade_1: 2.135 minfde_1: 5.867 mr_1: 0.674 brier_fde_1: 5.867 minade_k: 0.793 minfde_k: 1.510 mr_k: 0.215 brier_fde_k: 2.136 
+[Validation] Avg. loss: 0.253001, time cost: 2.57 mins
+-- minade_1: 2.140 minfde_1: 5.829 mr_1: 0.674 brier_fde_1: 5.829 minade_k: 0.815 minfde_k: 1.550 mr_k: 0.217 brier_fde_k: 2.179 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.179, epoch: 39
+
+Epoch 40
+[Training] Avg. loss: 0.239152, time cost: 54.2 mins, lr: 0.0001, peak mem: 10210 MB
+-- minade_1: 2.103 minfde_1: 5.792 mr_1: 0.669 brier_fde_1: 5.792 minade_k: 0.777 minfde_k: 1.474 mr_k: 0.209 brier_fde_k: 2.100 
+[Validation] Avg. loss: 0.249776, time cost: 2.79 mins
+-- minade_1: 2.096 minfde_1: 5.730 mr_1: 0.668 brier_fde_1: 5.730 minade_k: 0.799 minfde_k: 1.509 mr_k: 0.212 brier_fde_k: 2.132 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.132, epoch: 40
+Save the model to saved_models/20261029-100547_Simpl_ckpt_epoch40.tar
+
+Epoch 41
+[Training] Avg. loss: 0.238142, time cost: 54.3 mins, lr: 0.0001, peak mem: 10868 MB
+-- minade_1: 2.098 minfde_1: 5.778 mr_1: 0.668 brier_fde_1: 5.778 minade_k: 0.774 minfde_k: 1.467 mr_k: 0.207 brier_fde_k: 2.093 
+[Validation] Avg. loss: 0.24991, time cost: 2.55 mins
+-- minade_1: 2.098 minfde_1: 5.732 mr_1: 0.670 brier_fde_1: 5.732 minade_k: 0.800 minfde_k: 1.505 mr_k: 0.211 brier_fde_k: 2.128 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.128, epoch: 41
+
+Epoch 42
+[Training] Avg. loss: 0.237457, time cost: 53.8 mins, lr: 0.0001, peak mem: 10508 MB
+-- minade_1: 2.088 minfde_1: 5.756 mr_1: 0.667 brier_fde_1: 5.756 minade_k: 0.771 minfde_k: 1.460 mr_k: 0.205 brier_fde_k: 2.085 
+[Validation] Avg. loss: 0.250154, time cost: 2.74 mins
+-- minade_1: 2.102 minfde_1: 5.750 mr_1: 0.669 brier_fde_1: 5.750 minade_k: 0.798 minfde_k: 1.502 mr_k: 0.209 brier_fde_k: 2.124 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.124, epoch: 42
+
+Epoch 43
+[Training] Avg. loss: 0.237021, time cost: 54.0 mins, lr: 0.0001, peak mem: 10667 MB
+-- minade_1: 2.091 minfde_1: 5.763 mr_1: 0.668 brier_fde_1: 5.763 minade_k: 0.769 minfde_k: 1.458 mr_k: 0.205 brier_fde_k: 2.083 
+[Validation] Avg. loss: 0.24876, time cost: 2.63 mins
+-- minade_1: 2.103 minfde_1: 5.760 mr_1: 0.668 brier_fde_1: 5.760 minade_k: 0.796 minfde_k: 1.492 mr_k: 0.210 brier_fde_k: 2.120 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.12, epoch: 43
+
+Epoch 44
+[Training] Avg. loss: 0.236614, time cost: 53.3 mins, lr: 0.0001, peak mem: 10040 MB
+-- minade_1: 2.091 minfde_1: 5.766 mr_1: 0.667 brier_fde_1: 5.766 minade_k: 0.769 minfde_k: 1.455 mr_k: 0.205 brier_fde_k: 2.080 
+[Validation] Avg. loss: 0.248607, time cost: 2.67 mins
+-- minade_1: 2.112 minfde_1: 5.781 mr_1: 0.667 brier_fde_1: 5.781 minade_k: 0.796 minfde_k: 1.498 mr_k: 0.211 brier_fde_k: 2.123 
+
+Epoch 45
+[Training] Avg. loss: 0.236098, time cost: 52.2 mins, lr: 0.0001, peak mem: 9999 MB
+-- minade_1: 2.088 minfde_1: 5.759 mr_1: 0.666 brier_fde_1: 5.759 minade_k: 0.766 minfde_k: 1.450 mr_k: 0.204 brier_fde_k: 2.076 
+[Validation] Avg. loss: 0.250084, time cost: 2.66 mins
+-- minade_1: 2.103 minfde_1: 5.752 mr_1: 0.668 brier_fde_1: 5.752 minade_k: 0.798 minfde_k: 1.508 mr_k: 0.213 brier_fde_k: 2.129 
+
+Epoch 46
+[Training] Avg. loss: 0.23552, time cost: 50.1 mins, lr: 0.0001, peak mem: 10554 MB
+-- minade_1: 2.087 minfde_1: 5.758 mr_1: 0.666 brier_fde_1: 5.758 minade_k: 0.765 minfde_k: 1.447 mr_k: 0.203 brier_fde_k: 2.073 
+[Validation] Avg. loss: 0.24901, time cost: 2.69 mins
+-- minade_1: 2.115 minfde_1: 5.786 mr_1: 0.666 brier_fde_1: 5.786 minade_k: 0.797 minfde_k: 1.501 mr_k: 0.211 brier_fde_k: 2.123 
+
+Epoch 47
+[Training] Avg. loss: 0.23522, time cost: 54.7 mins, lr: 0.0001, peak mem: 10398 MB
+-- minade_1: 2.088 minfde_1: 5.762 mr_1: 0.666 brier_fde_1: 5.762 minade_k: 0.765 minfde_k: 1.450 mr_k: 0.203 brier_fde_k: 2.076 
+[Validation] Avg. loss: 0.249225, time cost: 2.73 mins
+-- minade_1: 2.135 minfde_1: 5.840 mr_1: 0.673 brier_fde_1: 5.840 minade_k: 0.799 minfde_k: 1.498 mr_k: 0.209 brier_fde_k: 2.125 
+
+Epoch 48
+[Training] Avg. loss: 0.234899, time cost: 52.1 mins, lr: 0.0001, peak mem: 10822 MB
+-- minade_1: 2.085 minfde_1: 5.751 mr_1: 0.667 brier_fde_1: 5.751 minade_k: 0.763 minfde_k: 1.445 mr_k: 0.202 brier_fde_k: 2.070 
+[Validation] Avg. loss: 0.249405, time cost: 2.71 mins
+-- minade_1: 2.129 minfde_1: 5.806 mr_1: 0.666 brier_fde_1: 5.806 minade_k: 0.799 minfde_k: 1.506 mr_k: 0.213 brier_fde_k: 2.131 
+
+Epoch 49
+[Training] Avg. loss: 0.234548, time cost: 53.6 mins, lr: 0.0001, peak mem: 12353 MB
+-- minade_1: 2.083 minfde_1: 5.744 mr_1: 0.666 brier_fde_1: 5.744 minade_k: 0.763 minfde_k: 1.444 mr_k: 0.202 brier_fde_k: 2.069 
+[Validation] Avg. loss: 0.248132, time cost: 2.69 mins
+-- minade_1: 2.110 minfde_1: 5.779 mr_1: 0.670 brier_fde_1: 5.779 minade_k: 0.795 minfde_k: 1.488 mr_k: 0.206 brier_fde_k: 2.114 
+Save the model: 20261029-100547_Simpl_best.tar, brier_fde_k: 2.114, epoch: 49
+
+Training completed in 2755.56 mins
+Save the model to saved_models/20261029-100547_Simpl_epoch50.tar
+
+Exit...
+
+=== R0 끝 2026-10-31 08:01:22 · 종료코드 0 ===
