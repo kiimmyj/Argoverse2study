@@ -147,12 +147,18 @@ def timing(rows):
 
 
 def decay_slope(rows, lo=DECAY[0], hi=DECAY[1]):
-    """LR 감쇠 구간에서 얼마나 떨어졌나. R0 의 −0.038 이 비교 기준."""
+    """LR 감쇠 구간에서 얼마나 떨어졌나. R0 의 −0.038 이 비교 기준.
+
+    ⚠️ 진행 중인 런은 이 구간이 **덜 찼다**. 그걸 `{lo}~{hi}` 로 적으면 거짓말이 된다
+    (R1 은 에폭 36·37 둘뿐인데 "36~40 에서 +0.006" 으로 읽혔다). 그래서 실제로 쓴
+    에폭 범위를 돌려주고, `complete` 로 끝까지 찼는지 알린다.
+    """
     v = vals(rows)
     ep = [e for e in sorted(v) if lo <= e <= hi]
     if len(ep) < 2:
         return None
-    return {"eps": ep, "first": v[ep[0]], "last": v[ep[-1]], "drop": v[ep[-1]] - v[ep[0]]}
+    return {"eps": ep, "lo": ep[0], "hi": ep[-1], "complete": ep[-1] >= hi,
+            "first": v[ep[0]], "last": v[ep[-1]], "drop": v[ep[-1]] - v[ep[0]]}
 
 
 def matched_boundary(upto):
@@ -342,12 +348,25 @@ def md_block(S):
                  "*\"효과가 적어도 관측된 시드 교체 한 번보다는 커야 한다\"*. "
                  "쓸 표현은 **\"확립했다\"가 아니라 \"~보다 크다 / 구별되지 않는다\"** 다. "
                  "통계적 주장을 하려면 시드가 더 필요하고(런당 46시간) 그건 이 실험의 범위를 넘는다.")
+    # 감쇠 구간. 덜 찬 런은 **같은 구간으로 자른 R0** 를 나란히 적는다 — 안 그러면
+    # 2점짜리 기울기가 R0 의 5점짜리 −0.038 과 맞대어져 없는 차이가 생긴다.
+    r0_rows = read_log(SIMPL / "r0.log")
+    r0_v = vals(r0_rows)
     for name, r in S["runs"].items():
-        if r["decay"]:
-            d = r["decay"]
-            L.append("")
-            L.append(f"**{name} 감쇠 구간 {DECAY[0]}~{DECAY[1]}**: "
+        d = r["decay"]
+        if not d:
+            continue
+        L.append("")
+        if d["complete"]:
+            L.append(f"**{name} 감쇠 구간 {d['lo']}~{d['hi']}**: "
                      f"{d['first']:.3f} → {d['last']:.3f}  (**{d['drop']:+.3f}**)")
+        else:
+            same = (f"R0 같은 구간 {r0_v[d['lo']]:.3f} → {r0_v[d['hi']]:.3f} "
+                    f"({r0_v[d['hi']] - r0_v[d['lo']]:+.3f})") if d["lo"] in r0_v and d["hi"] in r0_v else ""
+            L.append(f"**{name} 감쇠 구간 — 아직 덜 찼다**: 에폭 {d['lo']}~{d['hi']} 만 있다"
+                     f"({len(d['eps'])}점 / {DECAY[1] - DECAY[0] + 1}점). "
+                     f"{d['first']:.3f} → {d['last']:.3f} (**{d['drop']:+.3f}**), {same}. "
+                     f"⚠️ 2점 기울기는 R0 의 {DECAY[0]}~{DECAY[1]} −0.038 과 **맞댈 수 없다**.")
     return "\n".join(L)
 
 
