@@ -246,8 +246,8 @@ def fig_effect_vs_noise(plt, S):
                    label=f"같은 구간(에폭 1~{upto}) R0 런 내부 p90 ±{bd:.3f} — 시드 잡음 아님")
         ax.axhline(PREREG, color=C.MUTED, lw=0.9, ls=":", zorder=2)
         ax.axhline(-PREREG, color=C.MUTED, lw=0.9, ls=":", zorder=2)
-        ax.text(ep[0], PREREG, f" 사전 등록 {PREREG:.3f} (전 구간 — 너무 좁다)",
-                va="bottom", fontsize=7.8, color=C.MUTED)
+        ax.text(ep[-1] + 1.0, PREREG, f" 사전 등록 {PREREG:.3f}\n (전 구간 — 너무 좁다)",
+                va="center", fontsize=7.8, color=C.MUTED)
 
     ax.axhline(0, color=C.INK, lw=1.0, zorder=2)
     ax.plot(ep, d, color=C.C_ORANGE, marker="s", ms=4.6, lw=1.5, zorder=4)
