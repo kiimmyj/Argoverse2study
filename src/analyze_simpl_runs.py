@@ -146,6 +146,59 @@ def timing(rows):
             "total": float(sum(tr) + sum(va))}
 
 
+METRICS = [("va_ade", "minADE6"), ("va_ade1", "minADE1"), ("va_fde", "minFDE6"),
+           ("va_fde1", "minFDE1"), ("va_mr", "MR6"), ("va", "val손실")]
+
+
+def gap_shift(a_rows, b_rows, split=35, hi=None):
+    """격차가 구간 사이에 **움직였는가** — 끝점이 아니라 중앙값과 자기 지터로 본다.
+
+    왜 이 함수가 있나 — 2026-11-04 에 같은 실수를 두 번 했다.
+      ① "minADE1 격차가 +0.085 → +0.159 로 거의 두 배" — 에폭 37 이 그 계열의 **최저점**이었다.
+         감쇠 전 중앙 +0.155 → 감쇠 중 +0.136 이라 **실은 줄었다**(그것도 지터 안).
+      ② "minADE6 격차가 +0.039 → +0.028 로 좁아졌다" — 5점 계열이
+         +0.039 +0.049 +0.039 +0.031 +0.028 이고 **중앙은 +0.039 로 시작과 같다**.
+    둘 다 흔들리는 계열의 양 끝만 읽은 것이다. 문서 §5-② 에 "3점으로 추세를 말하지 말 것"
+    이라고 적어 놓고 2점으로 했다. 그래서 끝점을 못 쓰게 함수로 막는다.
+
+    눈금은 **지표마다 다르다** — 단일 모드는 원래 다중 모드보다 몇 배 튄다.
+    그래서 변화량을 그 지표 자신의 R0 인접 검증 |Δ| 중앙과 맞댄다.
+    """
+    a, b = {r["ep"]: r for r in a_rows}, {r["ep"]: r for r in b_rows}
+    out = []
+    for k, lab in METRICS:
+        ep = sorted(e for e in set(a) & set(b)
+                    if k in a[e] and k in b[e] and (hi is None or e <= hi))
+        pre = [b[e][k] - a[e][k] for e in ep if e <= split]
+        post = [b[e][k] - a[e][k] for e in ep if e > split]
+        if not pre or not post:
+            continue
+        ser = [a[e][k] for e in sorted(a) if k in a[e]]
+        jit = float(np.median(np.abs(np.diff(ser)))) if len(ser) > 1 else float("nan")
+        shift = float(np.median(post) - np.median(pre))
+        out.append({"key": k, "label": lab, "n_pre": len(pre), "n_post": len(post),
+                    "pre": float(np.median(pre)), "post": float(np.median(post)),
+                    "shift": shift, "jitter": jit, "readable": abs(shift) > jit,
+                    "series": [round(b[e][k] - a[e][k], 4) for e in ep if e > split]})
+    return out
+
+
+def drop_noise(rows, lo=DECAY[0], hi=DECAY[1]):
+    """두 런의 **낙폭 차이**에 쓸 잡음 눈금. 끝점 4개가 들어가므로 점당 σ의 2배다.
+
+    ⚠️ σ 자체가 구간에 따라 달라진다 — 학습이 실제로 내려가는 초반을 넣으면 부풀고,
+    고원만 보면 작아진다. 그래서 둘 다 돌려주고 **넓은 쪽으로 판정한다**.
+    """
+    v = vals(rows)
+    full = np.diff([v[e] for e in sorted(v)])
+    plat = np.diff([v[e] for e in sorted(v) if 9 <= e <= 35])
+    f = lambda d: float(np.std(d, ddof=1) / np.sqrt(2)) if len(d) > 1 else float("nan")
+    s_full, s_plat = f(full), f(plat)
+    return {"sigma_full": s_full, "sigma_plateau": s_plat,
+            "sd_full": 2 * s_full, "sd_plateau": 2 * s_plat,
+            "sd_use": 2 * max(s_full, s_plat)}
+
+
 def paired_timing(a_rows, b_rows, lo=1, blocks=((0, 12), (13, 25), (26, 37))):
     """에폭별로 **짝지은** 학습 시간 차이. 평균 하나로 뭉개면 두 가지를 놓친다.
 
@@ -245,6 +298,8 @@ def summarize():
         pr = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
         out["pairs"]["R1-R0"] = pr
         out["paired_timing"] = paired_timing(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
+        out["gap_shift"] = gap_shift(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
+        out["drop_noise"] = drop_noise(read_log(SIMPL / "r0.log"))
         if pr:
             out["boundary"]["R1-R0"] = {"upto": pr["eps"][-1], "p90": matched_boundary(pr["eps"][-1])}
     # 경계 구간은 **R1 이 어디까지 왔는지에 따라 움직인다**. 하드코딩하면 R1 이 지나간 뒤
@@ -442,6 +497,39 @@ def md_block(S):
                      f"({len(d['eps'])}점 / {DECAY[1] - DECAY[0] + 1}점). "
                      f"{d['first']:.3f} → {d['last']:.3f} (**{d['drop']:+.3f}**), {same}. "
                      f"⚠️ 2점 기울기는 R0 의 {DECAY[0]}~{DECAY[1]} −0.038 과 **맞댈 수 없다**.")
+
+    # 낙폭 차이에 쓸 눈금. 안 적으면 "R1 이 0.011 더 떨어졌다" 가 결론처럼 읽힌다.
+    dn = S.get("drop_noise")
+    s0, s1 = (S["runs"].get("R0") or {}).get("decay"), (S["runs"].get("R1") or {}).get("decay")
+    if dn and s0 and s1 and s0.get("complete") and s1.get("complete"):
+        dd = s1["drop"] - s0["drop"]
+        L.append("")
+        L.append(f"**낙폭 차이 {dd:+.3f} m** — 그런데 눈금이 이만큼이다: 낙폭차에는 끝점 4개가 들어가므로 "
+                 f"SD ≈ **{dn['sd_use']:.3f}** (R0 점당 σ 는 전 구간 {dn['sigma_full']:.4f} / "
+                 f"고원만 {dn['sigma_plateau']:.4f} — **넓은 쪽을 쓴다**). "
+                 f"관측값은 그 **{abs(dd) / dn['sd_use']:.2f}배**다. "
+                 "⚠️ 말할 수 있는 것은 **\"R1 도 감쇠 혜택을 R0 못지않게 받는다\"** 까지고, "
+                 "**\"R1 이 감쇠에 더 강하다\" 는 쓰지 않는다.**")
+
+    # 격차가 움직였나 — 끝점 금지. 지표마다 눈금이 다르다.
+    gs = S.get("gap_shift")
+    if gs:
+        L.append("")
+        L.append(f"**격차가 구간 사이에 움직였는가** — 끝점이 아니라 **중앙값**으로, 그 지표 자신의 "
+                 f"R0 인접 검증 |Δ| 중앙과 맞대서.")
+        L.append("")
+        L.append("| 지표 | 감쇠 전 중앙 | 감쇠 중 중앙 | 변화 | R0 자기 지터 | 읽을 수 있나 |")
+        L.append("| --- | --- | --- | --- | --- | --- |")
+        for g in gs:
+            L.append(f"| {g['label']} | {g['pre']:+.4f} (n={g['n_pre']}) | {g['post']:+.4f} "
+                     f"(n={g['n_post']}) | {g['shift']:+.4f} | {g['jitter']:.4f} | "
+                     f"{'⚠️ 지터보다 큼' if g['readable'] else '**아니다** — 지터 안'} |")
+        L.append("")
+        L.append("⚠️ **끝점으로 읽으면 전부 반대로 나온다.** 실제로 2026-11-04 에 두 번 그랬다 — "
+                 "*\"minADE1 격차가 +0.085 → +0.159 로 두 배\"* (에폭 37 이 그 계열 최저점이었고 "
+                 "중앙으로는 **줄었다**), *\"minADE6 격차가 +0.039 → +0.028 로 좁아졌다\"* "
+                 "(5점 중앙은 +0.039 로 **시작과 같다**). "
+                 "**단일 모드 지표는 다중 모드보다 몇 배 튄다** — 눈금을 지표마다 따로 써야 한다.")
 
     # 1에폭 시간. 평균 하나만 적으면 "비용 0" 으로 읽히는데, 그건 ±0.9분 안의 가설들을
     # 배제한 것처럼 들린다. 폭과 블록 구조를 같이 적는다.
