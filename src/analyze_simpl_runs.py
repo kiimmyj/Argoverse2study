@@ -457,10 +457,18 @@ def md_block(S):
                  f"{pt['median']:+.2f}분 | {pt['sd']:.2f} | {pt['se']:.2f} | "
                  f"**{pt['mean'] - pt['halfwidth']:+.2f} ~ {pt['mean'] + pt['halfwidth']:+.2f}분** |")
         L.append("")
+        # 50에폭 환산은 **계산한다**. "±45분" 처럼 눈대중으로 적으면 평균이 0 이 아닌 걸
+        # 뭉개고(구간이 비대칭이다), 총시간 대비 비율도 손으로 적으면 틀린다.
+        lo50, hi50 = 50 * (pt["mean"] - pt["halfwidth"]), 50 * (pt["mean"] + pt["halfwidth"])
+        tot = ((S["runs"].get("R0") or {}).get("timing") or {}).get("total")
+        share = (f" R0 실측 총시간 {tot / 60:.1f}시간에 대면 **{lo50 / tot * 100:+.1f}% ~ "
+                 f"{hi50 / tot * 100:+.1f}%** 다.") if tot else ""
         L.append(f"⚠️ **\"비용이 0\" 이라고 쓰지 않는다.** 말할 수 있는 것은 "
                  f"**±{pt['halfwidth']:.1f}분 안에서 0 과 구별되지 않는다** 까지다. "
                  "로더 실측이 예측했던 **+0.6분/에폭도 이 구간 안쪽**이라 "
-                 "확인도 기각도 되지 않았다. 50에폭이면 ±45분이고, 그건 이 비교로 가릴 수 없다.")
+                 f"확인도 기각도 되지 않았다. 50에폭으로 환산하면 **{lo50:+.0f} ~ {hi50:+.0f}분**"
+                 f"(반폭 {50 * pt['halfwidth']:.0f}분)이고,{share} "
+                 "런 하나를 더 돌리는 비용에 비하면 작지만, **0 이라고 부를 만큼 작지는 않다**.")
         if pt["ep0"]["a"] is not None and pt["ep0"]["b"] is not None:
             L.append("")
             L.append(f"에폭 0 을 빼는 이유 — 워밍업이 섞인다: R0 {pt['ep0']['a']:.1f}분 vs "
