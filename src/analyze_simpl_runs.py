@@ -146,6 +146,55 @@ def timing(rows):
             "total": float(sum(tr) + sum(va))}
 
 
+def paired_timing(a_rows, b_rows, lo=1, blocks=((0, 12), (13, 25), (26, 37))):
+    """에폭별로 **짝지은** 학습 시간 차이. 평균 하나로 뭉개면 두 가지를 놓친다.
+
+    ① 폭. 짝 차이의 표준편차가 2.8분이라 n=37 에서도 표준오차가 0.46분이다. 즉
+       말할 수 있는 건 "±0.9분(2SE) 안" 까지다. "비용 0" 이라고 쓰면 이 구간 안의
+       가설(로더 실측이 예측한 +0.6분/에폭)을 배제한 것처럼 읽히는데, 데이터는 그걸
+       말하지 않는다.
+    ② 블록 구조. 구간마다 부호가 뒤집힌다. 다만 **R0 혼자서도 같은 폭으로 드리프트**
+       하므로(10에폭 블록 평균이 ±2분 움직인다) 원인을 외부 부하로 지목할 근거는 없다.
+
+    `lo=1` 이 기본인 이유 — 에폭 0 은 워밍업이 섞인다(R1 56.5분 vs R0 52.1분).
+    양쪽을 같은 규칙으로 자른다.
+    """
+    a = {r["ep"]: r["tr_min"] for r in a_rows if "tr_min" in r}
+    b = {r["ep"]: r["tr_min"] for r in b_rows if "tr_min" in r}
+    ep = [e for e in sorted(set(a) & set(b)) if e >= lo]
+    if len(ep) < 2:
+        return None
+    d = np.array([b[e] - a[e] for e in ep])
+    se = float(d.std(ddof=1) / np.sqrt(len(d)))
+    out = {"lo": ep[0], "hi": ep[-1], "n": len(ep),
+           "a_mean": float(np.mean([a[e] for e in ep])), "b_mean": float(np.mean([b[e] for e in ep])),
+           "mean": float(d.mean()), "median": float(np.median(d)),
+           "sd": float(d.std(ddof=1)), "se": se, "halfwidth": 2 * se,
+           "ep0": {"a": a.get(0), "b": b.get(0)}, "blocks": []}
+    for blo, bhi in blocks:
+        sub = [b[e] - a[e] for e in sorted(set(a) & set(b)) if blo <= e <= bhi]
+        if sub:
+            out["blocks"].append({"lo": blo, "hi": bhi, "n": len(sub),
+                                  "median": float(np.median(sub)), "mean": float(np.mean(sub))})
+    return out
+
+
+def drift(rows, size=10):
+    """런 **하나**의 학습 시간이 자기 안에서 얼마나 움직이나. 블록 차이의 기준선이다."""
+    t = {r["ep"]: r["tr_min"] for r in rows if "tr_min" in r}
+    if not t:
+        return None
+    eps = sorted(t)
+    bl = []
+    for lo in range(0, max(eps) + 1, size):
+        sub = [t[e] for e in eps if lo <= e < lo + size]
+        if sub:
+            bl.append({"lo": lo, "hi": lo + size - 1, "n": len(sub), "mean": float(np.mean(sub))})
+    mn = [x["mean"] for x in bl]
+    return {"blocks": bl, "span": max(mn) - min(mn),
+            "lo": min(t.values()), "hi": max(t.values())}
+
+
 def decay_slope(rows, lo=DECAY[0], hi=DECAY[1]):
     """LR 감쇠 구간에서 얼마나 떨어졌나. R0 의 −0.038 이 비교 기준.
 
@@ -182,6 +231,7 @@ def summarize():
                      if last is not None else None,
             "best": {"ep": min(v, key=v.get), "ade": min(v.values())} if v else None,
             "jitter": jitter(rows), "timing": timing(rows), "decay": decay_slope(rows),
+            "drift": drift(rows),
             "curve": {str(e): v[e] for e in sorted(v)},
         }
     # R1 이 아직 진행 중이면, R0 를 같은 에폭까지만 다시 재서 나란히 둔다(함정 ③).
@@ -194,11 +244,16 @@ def summarize():
     if "R0" in runs and "R1" in runs:
         pr = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
         out["pairs"]["R1-R0"] = pr
+        out["paired_timing"] = paired_timing(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
         if pr:
             out["boundary"]["R1-R0"] = {"upto": pr["eps"][-1], "p90": matched_boundary(pr["eps"][-1])}
+    # 경계 구간은 **R1 이 어디까지 왔는지에 따라 움직인다**. 하드코딩하면 R1 이 지나간 뒤
+    # "지금 쓰는 값" 이 옛 에폭을 가리킨다. 37(보고한 지점)과 49(사전 등록)는 역사로 남긴다.
+    live = runs.get("R1", {}).get("last_val_ep")
+    hs = sorted({h for h in (live, 37, 49) if h})
+    out["boundary"]["live_upto"] = live
     out["boundary"]["windows"] = {
-        f"{lo}~{hi}": (jitter(read_log(SIMPL / "r0.log"), upto=hi) or {}).get("p90")
-        for lo, hi in ((1, 31), (1, 37), (1, 49))}
+        f"1~{h}": (jitter(read_log(SIMPL / "r0.log"), upto=h) or {}).get("p90") for h in hs}
     if "R0" in runs and "R0-s43" in runs:
         out["pairs"]["R0s43-R0"] = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r0s43.log"))
     return out
@@ -315,6 +370,7 @@ def md_block(S):
         # a_better(=d>0 인 에폭 수)는 **뒤쪽 이름(R0)** 의 승수다. 뒤집지 말 것.
         base, other = key.split("-")[0], key.split("-")[1]
         win, k = (other, p["a_better"]) if p["a_better"] >= p["b_better"] else (base, p["b_better"])
+        lost = base if win == other else other   # 진 쪽 = 이 비교로 성능을 따지려던 표현
         L.append("")
         L.append(f"**{lab}** — 공통 검증 {p['n']}개")
         L.append("")
@@ -322,10 +378,20 @@ def md_block(S):
         L.append("| --- | --- | --- | --- | --- | --- | --- |")
         L.append(f"| {key} | {p['median']:+.4f} | {p['mean']:+.4f} | {p['abs_median']:.4f} | "
                  f"{p['abs_p90']:.4f} | {p['abs_max']:.4f} | "
-                 f"**{win} 가 {k}/{p['n']}** (단측 p={sign_p(k, p['n']):.5f}) |")
+                 f"**{win} 가 {k}/{p['n']}** |")
         L.append("")
-        L.append("⚠️ p 는 **독립 가정**이다 — 한 학습 궤적의 인접 점이라 자기상관으로 **과소평가**된다. "
-                 "그리고 부호는 **지속성**만 재지 **원인**은 못 가른다(초기화 제비가 나쁘면 똑같이 나온다).")
+        L.append(f"**{k}/{p['n']} 이 말하는 것**: 격차가 **학습 궤적 전체에 걸쳐 지속적**이다 — "
+                 "끝점 한 번의 요동이 아니다.")
+        L.append("")
+        L.append("**말하지 않는 것**: **원인.** 초기화 제비가 운 좋으면 궤적 전체가 일관되게 깔려 "
+                 f"같은 {k}/{p['n']} 이 나온다.")
+        L.append("")
+        L.append(f"⚠️ **부호검정 p 는 보고하지 않는다.** 명목값은 {sign_p(k, p['n']):.1e} 지만 "
+                 f"이건 {p['n']}쌍을 독립 시행으로 가정한 값이다. "
+                 f"{p['n']}쌍은 독립 시행 {p['n']}개가 아니고 **런 쌍 하나를 {p['n']}번 들여다본 것**이라, "
+                 "실제 독립 단위는 **n=1** 이다. 그래서 이 p 를 "
+                 f"{lost} 의 표현에 대한 증거로 쓸 수 없다. "
+                 "시드 비교의 n 을 1 에서 2 로 올려 주는 것이 R0-s43 이다.")
     w = S.get("boundary", {}).get("windows") or {}
     if w:
         L.append("")
@@ -333,10 +399,19 @@ def md_block(S):
         L.append("")
         L.append("| R0 를 어디까지 잘랐나 | 런 내부 p90 | 쓰는 곳 |")
         L.append("| --- | --- | --- |")
-        use = {"1~31": "지금(R1 에폭 31까지)", "1~37": "에폭 37 판정", "1~49": "사전 등록에 쓴 값 — 너무 좁다"}
+        live = S.get("boundary", {}).get("live_upto")
         for k, v in w.items():
-            if v is not None:
-                L.append(f"| 에폭 {k} | **{v:.4f}** | {use.get(k, '')} |")
+            if v is None:
+                continue
+            hi = int(k.split("~")[1])
+            why = []
+            if live and hi == live:
+                why.append(f"**지금** — R1 이 에폭 {live}까지 왔다")
+            if hi == 37:
+                why.append("에폭 37 보고에 쓴 값")
+            if hi == 49:
+                why.append("사전 등록에 쓴 값 — 너무 좁다")
+            L.append(f"| 에폭 {k} | **{v:.4f}** | {' · '.join(why)} |")
         L.append("")
         L.append("⚠️ **끝점 판정에는 이 규칙조차 못 쓴다.** R0 는 감쇠 뒤(40~49) 인접 |Δ| 가 "
                  "0.000~0.004 라, 런 내부 경계를 그대로 쓰면 **0.002 를 넘는 모든 차이가 '유의'** 가 된다. "
@@ -367,6 +442,45 @@ def md_block(S):
                      f"({len(d['eps'])}점 / {DECAY[1] - DECAY[0] + 1}점). "
                      f"{d['first']:.3f} → {d['last']:.3f} (**{d['drop']:+.3f}**), {same}. "
                      f"⚠️ 2점 기울기는 R0 의 {DECAY[0]}~{DECAY[1]} −0.038 과 **맞댈 수 없다**.")
+
+    # 1에폭 시간. 평균 하나만 적으면 "비용 0" 으로 읽히는데, 그건 ±0.9분 안의 가설들을
+    # 배제한 것처럼 들린다. 폭과 블록 구조를 같이 적는다.
+    pt = S.get("paired_timing")
+    if pt:
+        L.append("")
+        L.append(f"**1에폭 학습 시간 — 짝지은 비교** (에폭 {pt['lo']}~{pt['hi']}, n={pt['n']}, "
+                 "`[Training]` 줄만, 양쪽 같은 규칙)")
+        L.append("")
+        L.append("| | 평균 | 짝 차이 평균 | 짝 차이 중앙 | 표준편차 | 표준오차 | 말할 수 있는 범위 (2SE) |")
+        L.append("| --- | --- | --- | --- | --- | --- | --- |")
+        L.append(f"| R0 → R1 | {pt['a_mean']:.2f} → {pt['b_mean']:.2f}분 | **{pt['mean']:+.2f}분** | "
+                 f"{pt['median']:+.2f}분 | {pt['sd']:.2f} | {pt['se']:.2f} | "
+                 f"**{pt['mean'] - pt['halfwidth']:+.2f} ~ {pt['mean'] + pt['halfwidth']:+.2f}분** |")
+        L.append("")
+        L.append(f"⚠️ **\"비용이 0\" 이라고 쓰지 않는다.** 말할 수 있는 것은 "
+                 f"**±{pt['halfwidth']:.1f}분 안에서 0 과 구별되지 않는다** 까지다. "
+                 "로더 실측이 예측했던 **+0.6분/에폭도 이 구간 안쪽**이라 "
+                 "확인도 기각도 되지 않았다. 50에폭이면 ±45분이고, 그건 이 비교로 가릴 수 없다.")
+        if pt["ep0"]["a"] is not None and pt["ep0"]["b"] is not None:
+            L.append("")
+            L.append(f"에폭 0 을 빼는 이유 — 워밍업이 섞인다: R0 {pt['ep0']['a']:.1f}분 vs "
+                     f"R1 {pt['ep0']['b']:.1f}분. 넣으면 짝 차이 평균이 부호까지 바뀐다.")
+        if pt["blocks"]:
+            L.append("")
+            L.append("**블록마다 부호가 뒤집힌다** — 평균 하나로 뭉개면 사라지는 구조다.")
+            L.append("")
+            L.append("| 에폭 | 쌍 | 짝 차이 중앙 | 짝 차이 평균 |")
+            L.append("| --- | --- | --- | --- |")
+            for b in pt["blocks"]:
+                L.append(f"| {b['lo']}~{b['hi']} | {b['n']} | **{b['median']:+.2f}분** | {b['mean']:+.2f}분 |")
+            dr = (S["runs"].get("R0") or {}).get("drift")
+            if dr:
+                bl = " → ".join(f"{x['mean']:.2f}" for x in dr["blocks"])
+                L.append("")
+                L.append(f"⚠️ 그런데 **R0 혼자서도 같은 폭으로 드리프트한다** — 10에폭 블록 평균이 "
+                         f"{bl} (폭 **{dr['span']:.2f}분**, 개별 에폭 {dr['lo']:.1f}~{dr['hi']:.1f}분). "
+                         "R0 는 다른 작업이 없을 때도 이만큼 움직였으므로, 블록 차이를 "
+                         "**외부 부하나 (a,h) 탓으로 지목할 근거는 없다**. 둘 다 적어 둔다.")
     return "\n".join(L)
 
 
