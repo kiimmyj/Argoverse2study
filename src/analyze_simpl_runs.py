@@ -35,7 +35,18 @@ RUNS = [
     ("R0-s43", SIMPL / "r0s43.log", "원본 14채널 · 시드 43"),
 ]
 DECAY = (36, 40)          # LR 1e-3 → 1e-4 구간 (R0 에서 확인)
-PREREG = 0.0415           # 사전 등록 경계 = R0 런 내부 인접 검증 |Δ| 의 p90
+
+# 사전 등록 경계. **고치지 않는다** — 사후에 바뀐 기준과 구분하려고 원래 값을 남긴다.
+# R0 전 구간(1~49, 36쌍)의 인접 검증 |Δ minADE6| p90 이다.
+PREREG = 0.0415
+
+# ⚠️ 그런데 이 상수는 비교 구간에 따라 틀린다. R0 는 감쇠 뒤(40~49) |Δ| 가 0.000~0.004 로
+# 거의 멈춰 있고, 그 9쌍이 전체 36쌍의 25% 라 p90 을 아래로 끌어내린다. 실측:
+#     1~49  p90 0.0415     1~31  p90 0.0637     1~37  p90 0.0511
+#     26~35 p90 0.0446     40~49 p90 0.0024
+# 그래서 경계는 **상수가 아니라 규칙**이다 — "맞대는 구간과 같은 구간의 R0 p90".
+# 끝점끼리 맞대는 최종 판정에는 이것조차 못 쓴다(0.002 를 넘는 모든 차이가 '유의' 가 된다).
+# **끝점에 쓸 자는 런 간 폭(|R0-s43 − R0|) 뿐이다.**
 
 
 # ────────────────────────────────────────────────────────────── 읽기
@@ -144,6 +155,12 @@ def decay_slope(rows, lo=DECAY[0], hi=DECAY[1]):
     return {"eps": ep, "first": v[ep[0]], "last": v[ep[-1]], "drop": v[ep[-1]] - v[ep[0]]}
 
 
+def matched_boundary(upto):
+    """비교 구간과 **같은 구간**의 R0 런 내부 p90. 경계는 상수가 아니라 이 규칙이다."""
+    j = jitter(read_log(SIMPL / "r0.log"), upto=upto)
+    return j["p90"] if j else None
+
+
 def summarize():
     runs = {}
     for name, path, desc in RUNS:
@@ -167,9 +184,15 @@ def summarize():
         if upto is not None and upto < max(int(k) for k in runs["R0"]["curve"]):
             runs["R0"]["jitter_matched"] = jitter(read_log(SIMPL / "r0.log"), upto=upto)
             runs["R0"]["matched_upto"] = upto
-    out = {"runs": runs, "pairs": {}, "prereg_boundary": PREREG}
+    out = {"runs": runs, "pairs": {}, "prereg_boundary": PREREG, "boundary": {}}
     if "R0" in runs and "R1" in runs:
-        out["pairs"]["R1-R0"] = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
+        pr = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r1.log"))
+        out["pairs"]["R1-R0"] = pr
+        if pr:
+            out["boundary"]["R1-R0"] = {"upto": pr["eps"][-1], "p90": matched_boundary(pr["eps"][-1])}
+    out["boundary"]["windows"] = {
+        f"{lo}~{hi}": (jitter(read_log(SIMPL / "r0.log"), upto=hi) or {}).get("p90")
+        for lo, hi in ((1, 31), (1, 37), (1, 49))}
     if "R0" in runs and "R0-s43" in runs:
         out["pairs"]["R0s43-R0"] = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r0s43.log"))
     return out
@@ -217,8 +240,14 @@ def fig_effect_vs_noise(plt, S):
         ax.fill_between(ep, -band, band, color=C.C_VIOLET, alpha=0.16, zorder=1,
                         label="시드 잡음 |R0s43 − R0| — 이 띠 안은 판정 불가")
     else:
-        ax.axhspan(-PREREG, PREREG, color=C.MUTED, alpha=0.13, zorder=1,
-                   label=f"사전 등록 경계 ±{PREREG:.3f} (런 내부 잡음 p90 · 시드 잡음 아님)")
+        bd = (S["boundary"].get("R1-R0") or {}).get("p90") or PREREG
+        upto = (S["boundary"].get("R1-R0") or {}).get("upto")
+        ax.axhspan(-bd, bd, color=C.MUTED, alpha=0.13, zorder=1,
+                   label=f"같은 구간(에폭 1~{upto}) R0 런 내부 p90 ±{bd:.3f} — 시드 잡음 아님")
+        ax.axhline(PREREG, color=C.MUTED, lw=0.9, ls=":", zorder=2)
+        ax.axhline(-PREREG, color=C.MUTED, lw=0.9, ls=":", zorder=2)
+        ax.text(ep[0], PREREG, f" 사전 등록 {PREREG:.3f} (전 구간 — 너무 좁다)",
+                va="bottom", fontsize=7.8, color=C.MUTED)
 
     ax.axhline(0, color=C.INK, lw=1.0, zorder=2)
     ax.plot(ep, d, color=C.C_ORANGE, marker="s", ms=4.6, lw=1.5, zorder=4)
@@ -291,6 +320,21 @@ def md_block(S):
         L.append("")
         L.append("⚠️ p 는 **독립 가정**이다 — 한 학습 궤적의 인접 점이라 자기상관으로 **과소평가**된다. "
                  "그리고 부호는 **지속성**만 재지 **원인**은 못 가른다(초기화 제비가 나쁘면 똑같이 나온다).")
+    w = S.get("boundary", {}).get("windows") or {}
+    if w:
+        L.append("")
+        L.append("**경계는 상수가 아니라 규칙이다** — 맞대는 구간과 **같은 구간**의 R0 런 내부 p90.")
+        L.append("")
+        L.append("| R0 를 어디까지 잘랐나 | 런 내부 p90 | 쓰는 곳 |")
+        L.append("| --- | --- | --- |")
+        use = {"1~31": "지금(R1 에폭 31까지)", "1~37": "에폭 37 판정", "1~49": "사전 등록에 쓴 값 — 너무 좁다"}
+        for k, v in w.items():
+            if v is not None:
+                L.append(f"| 에폭 {k} | **{v:.4f}** | {use.get(k, '')} |")
+        L.append("")
+        L.append("⚠️ **끝점 판정에는 이 규칙조차 못 쓴다.** R0 는 감쇠 뒤(40~49) 인접 |Δ| 가 "
+                 "0.000~0.004 라, 런 내부 경계를 그대로 쓰면 **0.002 를 넘는 모든 차이가 '유의'** 가 된다. "
+                 "**끝점에 쓸 자는 런 간 폭(|R0-s43 − R0|) 뿐이다.**")
     for name, r in S["runs"].items():
         if r["decay"]:
             d = r["decay"]
