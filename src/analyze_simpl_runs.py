@@ -351,6 +351,79 @@ def fig_curves(plt, S):
     C.savefig(fig, OUT / "a1_curves.png")
 
 
+def fig_meeting(plt, S):
+    """미팅용 한 장 — 왼쪽 "R1 이 계속 위", 오른쪽 "시드만 바꿔도 그만큼 흔들린다".
+
+    왜 따로 그리나 — a1/a2 는 분석용이라 주석이 많고 가로가 길다. 미팅 문서는 한 화면이고
+    빔으로 띄우므로 **두 패널 한 장**에 논지만 담는다. 논지는 하나다:
+    *"R1 은 항상 0 위에 있지만, 시드만 바꾼 런은 양쪽으로 그만큼 흔들린다."*
+
+    사용자 시각화 요건 중 여기 해당하는 것: **#6 축·색을 런끼리 통일 · #7 검증 에폭마다 점**.
+    (#1~5·8·10·11 은 예측 분석용이라 런 비교에는 해당 없음.)
+    """
+    runs = S["runs"]
+    if "R0" not in runs:
+        return
+    cur = {n: {int(k): v for k, v in r["curve"].items()} for n, r in runs.items()}
+    style = {"R0": (C.C_TOP, "o", "-"), "R1": (C.C_ORANGE, "s", "-"),
+             "R0-s43": (C.C_VIOLET, "^", "--")}
+    # 진행 중인 런은 이름에 그렇게 적는다 — 안 적으면 끝난 런으로 읽힌다.
+    done = {n: (r.get("n_epoch", 0) >= 50) for n, r in runs.items()}
+    lab = {n: (n if done[n] else f"{n} (진행 중 {max(cur[n])}/49)") for n in cur}
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12.4, 4.6),
+                                   gridspec_kw={"width_ratios": [1.15, 1]})
+
+    # ⚠️ 끝점 라벨은 쓰지 않는다 — 진행 중인 런은 선이 가운데서 끝나 글씨가 다른 선 위에 얹힌다
+    #    (2026-11-05 에 실제로 s43 라벨이 R1 선을 덮었다). 범례로 간다.
+    for n, c in cur.items():
+        col, mk, ls = style.get(n, (C.MUTED, ".", "-"))
+        ep = sorted(c)
+        axL.plot(ep, [c[e] for e in ep], color=col, marker=mk, ms=3.6, ls=ls, lw=1.5,
+                 zorder=4, label=lab[n])
+    axL.axvspan(DECAY[0] - 0.5, DECAY[1] + 0.5, color=C.C_GREEN, alpha=0.07, zorder=0)
+    axL.legend(loc="upper right", fontsize=8.4)
+    axL.text(sum(DECAY) / 2, axL.get_ylim()[0], "LR 감쇠", ha="center", va="bottom",
+             fontsize=8, color=C.C_GREEN)
+    axL.set_xlabel("에폭"); axL.set_ylabel("val minADE6 [m]  (낮을수록 좋다)")
+    axL.set_xlim(0, 51)
+    axL.set_title("① R1 은 처음부터 끝까지 R0 위에 있다", fontsize=10.5)
+
+    # 오른쪽 — R0 를 0 으로 놓고 뺀 차이. 부호를 살려야 "s43 은 양쪽으로 간다" 가 보인다.
+    axR.axhline(0, color=C.C_TOP, lw=1.6, zorder=3)
+    v0 = cur["R0"]
+    for n in ("R1", "R0-s43"):
+        if n not in cur:
+            continue
+        col, mk, ls = style[n]
+        ep = sorted(set(cur[n]) & set(v0))
+        axR.plot(ep, [cur[n][e] - v0[e] for e in ep],
+                 color=col, marker=mk, ms=3.6, ls=ls, lw=1.5, zorder=4, label=lab[n])
+    axR.set_xlabel("에폭"); axR.set_ylabel("R0 와의 차이 [m]   (R0 = 0)")
+    axR.set_title("② 시드만 바꿔도 그만큼 흔들린다", fontsize=10.5)
+
+    # 글상자가 데이터를 덮지 않도록 **위아래로 자리를 만든 뒤** 그 빈 칸에 놓는다.
+    lo, hi = axR.get_ylim()
+    axR.set_ylim(lo - (hi - lo) * 0.30, hi + (hi - lo) * 0.22)
+    box = dict(boxstyle="round,pad=0.35", fc=C.SURF, ec=C.GRID, lw=0.7, alpha=0.93)
+    # ⚠️ 두 폭을 **같은 에폭 창**에서 재야 한다. 각자 가진 만큼으로 재면 R1 은 37개,
+    #    s43 은 10개가 되어 비교가 성립하지 않는다(이 파일의 함정 ③ 이 그림 주석에서 재발했다).
+    win = sorted(set.intersection(*(set(c) for c in cur.values())))
+    msg = [f"에폭 {win[0]}~{win[-1]} 공통 {len(win)}개에서:"]
+    msg += [f"  |{n} − R0| 중앙 {np.median(d):.3f} · 최대 {max(d):.3f}"
+            for n in ("R1", "R0-s43") if n in cur
+            for d in [[abs(cur[n][e] - v0[e]) for e in win]]]
+    axR.text(0.015, 0.02, "\n".join(msg), transform=axR.transAxes, fontsize=8,
+             color=C.INK2, va="bottom", bbox=box, zorder=6)
+    axR.legend(loc="upper right", fontsize=8.4, framealpha=0.93, frameon=True)
+    if not all(done.values()):
+        axR.text(0.015, 0.975, "⚠ s43 진행 중 — 판정 아님. 판정은 끝점끼리.",
+                 transform=axR.transAxes, fontsize=8.2, color=C.C_RED, va="top",
+                 bbox=box, zorder=6)
+    fig.tight_layout()
+    C.savefig(fig, OUT / "m1_meeting.png")
+
+
 def fig_effect_vs_noise(plt, S):
     """핵심 그림 — (R1 − R0) 를 (R0s43 − R0) 잡음 띠 위에 올린다.
 
@@ -625,6 +698,7 @@ if __name__ == "__main__":
     plt = C.setup_mpl()
     fig_curves(plt, S)
     fig_effect_vs_noise(plt, S)
+    fig_meeting(plt, S)
     if not a.no_doc:
         write_doc(S)
     print(f"  숫자 → {OUT / 'numbers.json'}")
