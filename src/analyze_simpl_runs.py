@@ -400,7 +400,8 @@ def fig_meeting(plt, S):
         axR.plot(ep, [cur[n][e] - v0[e] for e in ep],
                  color=col, marker=mk, ms=3.6, ls=ls, lw=1.5, zorder=4, label=lab[n])
     axR.set_xlabel("에폭"); axR.set_ylabel("R0 와의 차이 [m]   (R0 = 0)")
-    axR.set_title("② 시드만 바꿔도 그만큼 흔들린다", fontsize=10.5)
+    # ⚠️ 제목이 폭만 말하면 "(a,h) 차이는 아무것도 아니다" 로 유리하게 읽힌다. 쏠림까지 담는다.
+    axR.set_title("② 시드는 크게 흔들리되 한쪽으로 쏠리지 않는다 — R1 은 쏠린다", fontsize=10.5)
 
     # 글상자가 데이터를 덮지 않도록 **위아래로 자리를 만든 뒤** 그 빈 칸에 놓는다.
     lo, hi = axR.get_ylim()
@@ -409,10 +410,17 @@ def fig_meeting(plt, S):
     # ⚠️ 두 폭을 **같은 에폭 창**에서 재야 한다. 각자 가진 만큼으로 재면 R1 은 37개,
     #    s43 은 10개가 되어 비교가 성립하지 않는다(이 파일의 함정 ③ 이 그림 주석에서 재발했다).
     win = sorted(set.intersection(*(set(c) for c in cur.values())))
-    msg = [f"에폭 {win[0]}~{win[-1]} 공통 {len(win)}개에서:"]
-    msg += [f"  |{n} − R0| 중앙 {np.median(d):.3f} · 최대 {max(d):.3f}"
-            for n in ("R1", "R0-s43") if n in cur
-            for d in [[abs(cur[n][e] - v0[e]) for e in win]]]
+    # ⚠️ **폭(|·|)과 쏠림(부호 있는 중앙)은 다른 것이다.** |·| 만 적으면 "시드도 그만큼
+    #    흔들리니 (a,h) 차이는 아무것도 아니다" 로 잘못 읽힌다. 시드는 크게 흔들리되
+    #    **어느 쪽으로도 쏠리지 않을** 수 있고, 실제로 그렇다. 둘 다 적는다.
+    msg = [f"에폭 {win[0]}~{win[-1]} 공통 {len(win)}개"]
+    for n in ("R1", "R0-s43"):
+        if n not in cur:
+            continue
+        sd = [cur[n][e] - v0[e] for e in win]
+        ad = [abs(x) for x in sd]
+        msg.append(f"  {n} − R0 : 쏠림(중앙) {np.median(sd):+.3f} · "
+                   f"폭 |·|최대 {max(ad):.3f} · R0 보다 나은 에폭 {sum(1 for x in sd if x < 0)}/{len(sd)}")
     axR.text(0.015, 0.02, "\n".join(msg), transform=axR.transAxes, fontsize=8,
              color=C.INK2, va="bottom", bbox=box, zorder=6)
     axR.legend(loc="upper right", fontsize=8.4, framealpha=0.93, frameon=True)
