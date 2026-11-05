@@ -36,6 +36,12 @@ RUNS = [
 ]
 DECAY = (36, 40)          # LR 1e-3 → 1e-4 구간 (R0 에서 확인)
 
+# 감쇠가 끝나고 세 런이 다 멈춘 구간. **끝점 판정의 잡음은 여기서 가져온다.**
+# 왜 여기인가 — 끝점끼리 맞대는 비교의 잡음은 "끝점과 같은 상태"에서 재야 한다.
+# 고 LR 구간을 섞으면 |s43 − R0| 의 폭이 0.125 로 나오는데, 그건 두 런이 아직
+# 움직이던 때의 폭이다. 감쇠 뒤엔 각 런 자신의 폭이 0.004~0.010 로 줄어든다.
+SETTLED = (41, 49)
+
 # 사전 등록 경계. **고치지 않는다** — 사후에 바뀐 기준과 구분하려고 원래 값을 남긴다.
 # R0 전 구간(1~49, 36쌍)의 인접 검증 |Δ minADE6| p90 이다.
 PREREG = 0.0415
@@ -79,8 +85,10 @@ def read_log(path):
             cur["va"], cur["va_min"] = float(m.group(1)), float(m.group(2))
             pend = "va"
             continue
+        # brier_fde_k 도 읽는다 — SIMPL 이 **best 체크포인트를 고르는 기준**이 이것이다.
         m = re.search(r"minade_1: ([\d.]+) minfde_1: ([\d.]+) mr_1: ([\d.]+).*"
-                      r"minade_k: ([\d.]+) minfde_k: ([\d.]+) mr_k: ([\d.]+)", ln)
+                      r"minade_k: ([\d.]+) minfde_k: ([\d.]+) mr_k: ([\d.]+) "
+                      r"brier_fde_k: ([\d.]+)", ln)
         if m and pend:
             cur[f"{pend}_ade1"] = float(m.group(1))
             cur[f"{pend}_fde1"] = float(m.group(2))
@@ -88,6 +96,7 @@ def read_log(path):
             cur[f"{pend}_ade"] = float(m.group(4))
             cur[f"{pend}_fde"] = float(m.group(5))
             cur[f"{pend}_mr"] = float(m.group(6))
+            cur[f"{pend}_brier"] = float(m.group(7))
             pend = None
     return [r for r in rows if "tr" in r]
 
@@ -146,8 +155,9 @@ def timing(rows):
             "total": float(sum(tr) + sum(va))}
 
 
-METRICS = [("va_ade", "minADE6"), ("va_ade1", "minADE1"), ("va_fde", "minFDE6"),
-           ("va_fde1", "minFDE1"), ("va_mr", "MR6"), ("va", "val손실")]
+METRICS = [("va_ade", "minADE6"), ("va_fde", "minFDE6"), ("va_mr", "MR6"),
+           ("va_ade1", "minADE1"), ("va_fde1", "minFDE1"),
+           ("va_brier", "brier_FDE6"), ("va", "val손실")]
 
 
 def gap_shift(a_rows, b_rows, split=35, hi=None):
@@ -277,6 +287,36 @@ def decay_slope(rows, lo=DECAY[0], hi=DECAY[1]):
             "first": v[ep[0]], "last": v[ep[-1]], "drop": v[ep[-1]] - v[ep[0]]}
 
 
+def settled_band(a_rows, b_rows, lo=SETTLED[0], hi=SETTLED[1]):
+    """정착 구간에서 두 런의 격차 **띠**. 끝점 판정에 쓰는 자다.
+
+    끝점 하나는 점이고, 점끼리 비교하면 "그 점이 운이었나" 를 못 가린다.
+    감쇠 뒤 구간은 각 런이 거의 멈춰 있으므로, 거기 9점을 띠로 묶으면
+    **두 띠가 겹치는지**로 볼 수 있다 — 겹치면 구별 못 하고, 떨어지면 구별된다.
+
+    ⚠️ 겹치지 않는다고 통계적 유의가 아니다. 이 띠는 **런 내부** 잠잠함을 재며
+    **런 사이** 분산(시드 표본은 2개뿐)을 재지 않는다. §6 의 필요조건까지다.
+    """
+    a, b = vals(a_rows), vals(b_rows)
+    ep = [e for e in sorted(set(a) & set(b)) if lo <= e <= hi]
+    if len(ep) < 2:
+        return None
+    d = np.array([b[e] - a[e] for e in ep])
+    return {"eps": ep, "lo": ep[0], "hi": ep[-1], "n": len(ep),
+            "median": float(np.median(d)), "min": float(d.min()), "max": float(d.max()),
+            "sd": float(d.std(ddof=1)), "b_better": int((d < 0).sum())}
+
+
+def settled_self(rows, lo=SETTLED[0], hi=SETTLED[1]):
+    """런 하나가 정착 구간에서 얼마나 움직이나. 끝점 하나를 믿어도 되는지의 근거."""
+    v = vals(rows)
+    s = [v[e] for e in sorted(v) if lo <= e <= hi]
+    if len(s) < 2:
+        return None
+    return {"n": len(s), "min": min(s), "max": max(s), "span": max(s) - min(s),
+            "sd": float(np.std(s, ddof=1))}
+
+
 def matched_boundary(upto):
     """비교 구간과 **같은 구간**의 R0 런 내부 p90. 경계는 상수가 아니라 이 규칙이다."""
     j = jitter(read_log(SIMPL / "r0.log"), upto=upto)
@@ -294,11 +334,10 @@ def summarize():
         runs[name] = {
             "desc": desc, "log": str(path), "n_epoch": len(rows), "n_val": len(v),
             "last_val_ep": last,
-            "final": {k: rows[-1].get(k) for k in ("va_ade", "va_fde", "va_mr", "va_ade1", "va")}
-                     if last is not None else None,
+            "final": {k: rows[-1].get(k) for k, _ in METRICS} if last is not None else None,
             "best": {"ep": min(v, key=v.get), "ade": min(v.values())} if v else None,
             "jitter": jitter(rows), "timing": timing(rows), "decay": decay_slope(rows),
-            "drift": drift(rows),
+            "drift": drift(rows), "settled": settled_self(rows),
             "curve": {str(e): v[e] for e in sorted(v)},
         }
     # R1 이 아직 진행 중이면, R0 를 같은 에폭까지만 다시 재서 나란히 둔다(함정 ③).
@@ -325,6 +364,20 @@ def summarize():
         f"1~{h}": (jitter(read_log(SIMPL / "r0.log"), upto=h) or {}).get("p90") for h in hs}
     if "R0" in runs and "R0-s43" in runs:
         out["pairs"]["R0s43-R0"] = between(read_log(SIMPL / "r0.log"), read_log(SIMPL / "r0s43.log"))
+    # 정착 구간 띠 — 끝점 판정에 쓰는 자. 두 쌍을 같은 구간에서 재야 비교가 성립한다.
+    r0 = read_log(SIMPL / "r0.log")
+    out["settled"] = {k: v for k, v in (
+        ("R1-R0", settled_band(r0, read_log(SIMPL / "r1.log"))),
+        ("R0s43-R0", settled_band(r0, read_log(SIMPL / "r0s43.log")))) if v}
+    # 두 띠가 겹치는가. 겹치면 구별 못 한다 — 사후에 눈으로 보지 않고 코드가 정한다.
+    e, n = out["settled"].get("R1-R0"), out["settled"].get("R0s43-R0")
+    if e and n:
+        lo, hi = max(min(e["min"], e["max"]), min(n["min"], n["max"])), \
+                 min(max(e["min"], e["max"]), max(n["min"], n["max"]))
+        out["settled"]["overlap"] = {
+            "disjoint": lo > hi,
+            "gap": float(lo - hi) if lo > hi else 0.0,
+            "ratio": abs(e["median"]) / abs(n["median"]) if n["median"] else None}
     return out
 
 
@@ -423,10 +476,25 @@ def fig_meeting(plt, S):
                    f"폭 |·|최대 {max(ad):.3f} · R0 보다 나은 에폭 {sum(1 for x in sd if x < 0)}/{len(sd)}")
     axR.text(0.015, 0.02, "\n".join(msg), transform=axR.transAxes, fontsize=8,
              color=C.INK2, va="bottom", bbox=box, zorder=6)
+    # 판정이 걸린 구간을 눈에 보이게 — 오른쪽 꼬리에서 두 계열이 갈라지는 것이 결론이다.
+    st = (S.get("settled") or {})
+    e, n = st.get("R1-R0"), st.get("R0s43-R0")
+    if e and n:
+        axR.axvspan(e["lo"] - 0.4, e["hi"] + 0.4, color=C.C_GREEN, alpha=0.10, zorder=0)
+        # y 는 축 비율로 — 아래쪽은 글상자가, 위쪽은 범례가 차지한다. 그 사이 빈 칸에 둔다.
+        axR.text((e["lo"] + e["hi"]) / 2, 0.30, "정착 구간", ha="center", va="center",
+                 fontsize=8, color=C.C_GREEN, zorder=5,
+                 transform=axR.get_xaxis_transform())
     axR.legend(loc="upper right", fontsize=8.4, framealpha=0.93, frameon=True)
     if not all(done.values()):
         axR.text(0.015, 0.975, "⚠ s43 진행 중 — 판정 아님. 판정은 끝점끼리.",
                  transform=axR.transAxes, fontsize=8.2, color=C.C_RED, va="top",
+                 bbox=box, zorder=6)
+    elif e and n and st.get("overlap", {}).get("disjoint"):
+        axR.text(0.015, 0.975,
+                 f"판정 — 정착 구간 {e['lo']}~{e['hi']} 에서 두 띠가 겹치지 않는다\n"
+                 f"  시드 최대 {n['max']:+.3f}  <  R1 최소 {e['min']:+.3f}",
+                 transform=axR.transAxes, fontsize=8.2, color=C.INK, va="top",
                  bbox=box, zorder=6)
     fig.tight_layout()
     C.savefig(fig, OUT / "m1_meeting.png")
@@ -470,9 +538,26 @@ def fig_effect_vs_noise(plt, S):
                 fontsize=8.8, color=col)
     med = float(np.median(d))
     ax.axhline(med, color=C.C_RED, lw=1.0, ls=":", zorder=2)
-    ax.text(ep[0], med, f" 중앙 {med:+.3f}", va="bottom", fontsize=8.4, color=C.C_RED)
-    ax.text(sum(DECAY) / 2, ax.get_ylim()[0], "LR 감쇠\n(아직 안 옴)", ha="center", va="bottom",
-            fontsize=8.2, color=C.C_GREEN)
+    # 왼쪽 끝은 잡음 띠가 가장 넓은 곳이라 글씨가 띠 위에 얹힌다. 오른쪽에 **자리를 만들고** 둔다
+    # (여백 없이 밀면 축 밖으로 나가 글씨가 잘린다 — 11-06 에 그랬다).
+    ax.set_xlim(right=ep[-1] + 6)
+    ax.text(ep[-1] + 1.0, med, f" 중앙 {med:+.3f}", va="center", fontsize=8.4, color=C.C_RED)
+    # ⚠️ "(아직 안 옴)" 은 11-02 에 R1 이 감쇠 전이라 박아 둔 것이다. 하드코딩이라
+    #    셋 다 완주한 뒤에도 그대로 찍혔다(11-06 에 잡음). 런 상태에서 읽는다.
+    reached = all((r.get("decay") or {}).get("complete") for r in S["runs"].values())
+    ax.text(sum(DECAY) / 2, ax.get_ylim()[0], "LR 감쇠" if reached else "LR 감쇠\n(아직 안 옴)",
+            ha="center", va="bottom", fontsize=8.2, color=C.C_GREEN)
+    # 판정이 걸린 구간 — 여기서 띠가 좁아지는데 주황 선은 안 내려온다. 그게 결론이다.
+    e, n = (S.get("settled") or {}).get("R1-R0"), (S.get("settled") or {}).get("R0s43-R0")
+    if e and n and (S.get("settled") or {}).get("overlap", {}).get("disjoint"):
+        # ⚠️ matplotlib 는 마크다운을 모른다 — `**강조**` 가 별표째 찍힌다(11-06 에 그랬다).
+        ax.annotate(f"정착 구간 {e['lo']}~{e['hi']} — 띠는 ±{n['max']:.3f} 로 좁아지는데\n"
+                    f"주황 선은 {e['min']:+.3f} 아래로 안 내려온다 → 겹치지 않는다",
+                    xy=((e["lo"] + e["hi"]) / 2, e["median"]),
+                    xytext=((e["lo"] + e["hi"]) / 2, ax.get_ylim()[0] * 0.62),
+                    ha="center", fontsize=8.2, color=C.INK,
+                    bbox=dict(boxstyle="round,pad=0.35", fc=C.SURF, ec=C.GRID, lw=0.7, alpha=0.95),
+                    arrowprops=dict(arrowstyle="->", color=C.INK2, lw=0.9), zorder=6)
     ax.set_xlabel("에폭"); ax.set_ylabel("R1 − R0  [m]")
     ax.set_title("효과를 잡음 위에 올려 본다 — 띠 안이면 '차이 없음'이다")
     ax.legend(loc="upper right", fontsize=8.4, framealpha=0.92)
@@ -542,6 +627,62 @@ def md_block(S):
                  "실제 독립 단위는 **n=1** 이다. 그래서 이 p 를 "
                  f"{lost} 의 표현에 대한 증거로 쓸 수 없다. "
                  "시드 비교의 n 을 1 에서 2 로 올려 주는 것이 R0-s43 이다.")
+    # 끝점 비교 — 지표마다 "(a,h) 열세 ÷ 시드 교체 폭". 손으로 적으면 또 틀린다.
+    fin = {n: (r.get("final") or {}) for n, r in S["runs"].items()}
+    if all(fin.get(n) for n in ("R0", "R1", "R0-s43")):
+        L.append("")
+        L.append(f"**끝점 비교 — 일곱 지표** (에폭 {S['runs']['R0']['last_val_ep']} 검증). "
+                 "자는 **시드만 바꾼 s43 의 격차**다.")
+        L.append("")
+        L.append("| 지표 | R0 (시드42) | **R1 (a,h)** | R0-s43 (시드43) | R1−R0 | s43−R0 | 배수 |")
+        L.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for k, lab in METRICS:
+            a, b, c = fin["R0"].get(k), fin["R1"].get(k), fin["R0-s43"].get(k)
+            if None in (a, b, c):
+                continue
+            f = "{:.4f}" if k == "va" else "{:.3f}"
+            d1, d2 = b - a, c - a
+            rat = f"**{abs(d1) / abs(d2):.1f}×**" if d2 else "—"
+            L.append(f"| {lab} | {f.format(a)} | **{f.format(b)}** | {f.format(c)} | "
+                     f"**{d1:+.4f}** | {d2:+.4f} | {rat} |")
+        L.append("")
+        worst = min((abs(fin['R1'][k] - fin['R0'][k]) / abs(fin['R0-s43'][k] - fin['R0'][k]), lab)
+                    for k, lab in METRICS
+                    if fin['R0-s43'].get(k) is not None
+                    and fin['R0-s43'][k] != fin['R0'][k])
+        L.append(f"**일곱 지표 전부에서 (a, h) 의 열세가 시드 교체 폭보다 크다.** "
+                 f"가장 좁은 것이 {worst[1]} 의 **{worst[0]:.1f}배**다.")
+
+    st = S.get("settled") or {}
+    if st.get("R1-R0") and st.get("R0s43-R0"):
+        e, n, ov = st["R1-R0"], st["R0s43-R0"], st.get("overlap", {})
+        L.append("")
+        L.append(f"**끝점 판정의 자 — 정착 구간 띠** (에폭 {n['lo']}~{n['hi']}, {n['n']}점). "
+                 "감쇠가 끝나고 세 런이 다 멈춘 뒤라, 여기 격차는 **점이 아니라 띠**다.")
+        L.append("")
+        L.append("| 격차 | 중앙 | 최소 | 최대 | SD | R0 보다 나은 에폭 |")
+        L.append("| --- | --- | --- | --- | --- | --- |")
+        for lab, p in (("**R1 − R0** (입력 바꿈)", e), ("R0-s43 − R0 (시드만)", n)):
+            L.append(f"| {lab} | **{p['median']:+.4f}** | {p['min']:+.4f} | {p['max']:+.4f} | "
+                     f"{p['sd']:.4f} | {p['b_better']}/{p['n']} |")
+        L.append("")
+        for name, r in S["runs"].items():
+            s = r.get("settled")
+            if s:
+                L.append(f"- {name} 자신의 정착 구간 폭: {s['min']:.3f}~{s['max']:.3f} "
+                         f"(**{s['span']:.3f}**, SD {s['sd']:.4f})")
+        L.append("")
+        if ov.get("disjoint"):
+            L.append(f"→ **두 띠가 겹치지 않는다** — 시드 띠의 최대 {n['max']:+.4f} 와 "
+                     f"R1 띠의 최소 {e['min']:+.4f} 사이에 **{ov['gap']:.4f} 의 빈칸**이 있다. "
+                     f"중앙끼리는 **{ov['ratio']:.1f}배**. "
+                     "각 런 자신의 폭이 위처럼 작으므로 **끝점 하나는 운이 아니다.**")
+        else:
+            L.append("→ **두 띠가 겹친다** — 끝점에서 둘을 구별할 수 없다.")
+        L.append("")
+        L.append("⚠️ **겹치지 않는 것이 통계적 유의는 아니다.** 이 띠가 좁은 것은 **런 내부**가 "
+                 "잠잠하다는 뜻이고, **런 사이** 분산을 재 준 것이 아니다 — 시드 표본은 아직 "
+                 "2개뿐이다. 셋째 시드가 +0.03 을 낼 수도 있다. §6 의 **필요조건**까지다.")
     w = S.get("boundary", {}).get("windows") or {}
     if w:
         L.append("")
@@ -605,6 +746,16 @@ def md_block(S):
                  f"관측값은 그 **{abs(dd) / dn['sd_use']:.2f}배**다. "
                  "⚠️ 말할 수 있는 것은 **\"R1 도 감쇠 혜택을 R0 못지않게 받는다\"** 까지고, "
                  "**\"R1 이 감쇠에 더 강하다\" 는 쓰지 않는다.**")
+        # 눈금이 둘이면 둘 다 적는다. s43 은 시드만 바꿔서 난 낙폭차라 **같은 종류의 자**다
+        # (위 SD 는 R0 한 런의 점 잡음에서 환산한 것이라 종류가 다르다).
+        s43 = (S["runs"].get("R0-s43") or {}).get("decay")
+        if s43 and s43.get("complete"):
+            ds = s43["drop"] - s0["drop"]
+            L.append("")
+            L.append(f"**그리고 시드만 바꾼 s43 의 낙폭차는 {ds:+.3f} m 다** — R1 의 {dd:+.3f} 와 "
+                     f"같은 자리다(비 **{abs(dd) / abs(ds):.1f}배**). 즉 셋 중 바깥은 "
+                     f"R1 의 {s1['drop']:+.3f} 가 아니라 **R0 의 {s0['drop']:+.3f}** 다. "
+                     "→ **낙폭 차이는 시드 폭 안이고, 표현의 효과로 읽을 수 없다.**")
 
     # 격차가 움직였나 — 끝점 금지. 지표마다 눈금이 다르다.
     gs = S.get("gap_shift")
