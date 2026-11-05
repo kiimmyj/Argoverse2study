@@ -284,6 +284,7 @@ def main():
     ap.add_argument("--spread", type=int, default=0, help="예측이 갈라지는 장면 찾기")
     ap.add_argument("--scene", type=int, default=-1, help="val 인덱스")
     ap.add_argument("--repr", type=int, default=-1, help="표현 비교 그림")
+    ap.add_argument("--anatomy", type=int, default=-1, help="데이터셋 해부 그림")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if a.find:
@@ -298,6 +299,8 @@ def main():
             print("→", draw_scene(a.scene, st, OUT / f"{name}.png", title))
     if a.repr >= 0:
         print("→", draw_repr(a.repr, OUT / "t4_repr.png"))
+    if a.anatomy >= 0:
+        print("→", draw_anatomy(a.anatomy, OUT / "t0_anatomy.png"))
 
 
 
@@ -373,6 +376,77 @@ def draw_repr(idx, path):
     fig.suptitle("같은 궤적, 두 가지 적는 법 — 내 질문은 \"오른쪽으로 적으면 쉬워지는가\" 다",
                  fontsize=15, y=0.99)
     fig.subplots_adjust(top=0.86, left=0.05, right=0.985, bottom=0.11)
+    return C.savefig(fig, path, dpi=150)
+
+
+# ──────────────────────────────────────────────── 데이터셋 해부 (발표 2번 장)
+
+ROLE = {"focal": ("점수를 받는 한 대", None), "av": ("데이터를 모은 차 (AV)", None),
+        "score": ("점수엔 안 들어가지만 끝까지 추적된 차", None),
+        "unscore": ("추적은 됐지만 평가 대상 아님", None),
+        "frag": ("조각 — 5초 중 일부만 보이다 끊긴 트랙", None)}
+
+
+def draw_anatomy(idx, path):
+    """장면 하나에 **무엇이 들어 있나** — 트랙을 역할별로 칠한다.
+
+    왜 이 그림이 필요한가 — AV2 는 책상에서 만든 데이터가 아니라 **자율주행차가 돌아다니며
+    인식 시스템으로 추적한 결과**다. 그래서 깔끔하지 않다: 트랙의 절반 이상이 조각이고,
+    관측 구간 step 의 1/5 이 비어 있다. 그런데 **focal 한 대만은 5초가 온전히 보장**된다.
+    이 비대칭이 뒤에서 "주변 차 입력이 뭉개졌나" 를 따지는 자리의 출발점이다.
+    """
+    plt = C.setup_mpl()
+    data, _, _ = predict(idx)
+    d = data["TRAJS"][0]
+    ctrs, vecs, cat = d["TRAJS_CTRS"], d["TRAJS_VECS"], d["TRAJS_CAT"]
+    pad = d["PAD_OBS"].numpy().astype(bool)
+
+    col = {"focal": C.C_BLUE, "av": C.C_GREEN, "score": C.C_VIOLET,
+           "unscore": C.C_AQUA, "frag": C.MUTED}
+    cnt = {k: sum(1 for c in cat if c == k) for k in col}
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.set_aspect("equal", adjustable="datalim"); ax.axis("off"); ax.grid(False)
+    for ln in _lanes(data["LANE_GRAPH"][0]):
+        ax.plot(ln[:, 0], ln[:, 1], color=C.GRID, lw=1.6, zorder=1, solid_capstyle="round")
+
+    seen, pts = set(), []
+    for i in range(len(ctrs)):
+        c = cat[i]
+        p = to_scene(d["TRAJS_POS_OBS"][i], ctrs[i], vecs[i]).numpy()
+        # ⚠️ 조각 트랙은 **보인 step 만** 그려야 한다. 전처리가 결측을 최근접 복사로 메워서
+        #    그냥 그리면 한 점에 뭉친 꼬리가 생기고, "조각" 이라는 사실이 안 보인다.
+        vis = p[pad[i]]
+        lab = None if c in seen else f"{ROLE[c][0]} · {cnt[c]}대"
+        seen.add(c)
+        w = 4.2 if c == "focal" else (2.4 if c in ("av", "score") else 1.5)
+        if len(vis) >= 2:
+            ax.plot(vis[:, 0], vis[:, 1], color=col[c], lw=w, alpha=0.95 if c == "focal" else 0.75,
+                    zorder=9 if c == "focal" else 4, label=lab)
+        elif len(vis) == 1:
+            ax.plot(*vis[0], marker="o", ms=4, color=col[c], zorder=4, label=lab)
+        C.draw_box(ax, p[-1, 0], p[-1, 1], float(np.arctan2(vecs[i][1], vecs[i][0])),
+                   col[c], alpha=0.9 if c == "focal" else 0.55,
+                   zorder=10 if c == "focal" else 5)
+        if c in ("focal", "av", "score", "unscore"):
+            pts.append(p)
+
+    q = np.concatenate(pts)
+    lo, hi = q.min(0), q.max(0)
+    cen, pad_m = (lo + hi) / 2, float((hi - lo).max()) * 0.08 + 14
+    w_, h_ = float(hi[0] - lo[0]) + 2 * pad_m, float(hi[1] - lo[1]) + 2 * pad_m
+    if w_ / h_ < AR:
+        w_ = h_ * AR
+    else:
+        h_ = w_ / AR
+    ax.set_xlim(cen[0] - w_ / 2, cen[0] + w_ / 2); ax.set_ylim(cen[1] - h_ / 2, cen[1] + h_ / 2)
+    C.scale_bar(ax, ax.get_xlim(), ax.get_ylim())
+    ax.set_title(f"장면 하나에 들어 있는 것 — 추적 {len(ctrs)}대 · 차선 조각 "
+                 f"{len(data['LANE_GRAPH'][0]['lane_ctrs'])}개 · 과거 5초만 표시",
+                 fontsize=15, pad=12)
+    ax.legend(loc="upper left", fontsize=11.5, frameon=True, framealpha=0.93,
+              facecolor=C.SURF, edgecolor=C.GRID)
+    fig.tight_layout()
     return C.savefig(fig, path, dpi=150)
 
 if __name__ == "__main__":
