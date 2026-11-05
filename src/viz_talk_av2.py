@@ -381,10 +381,18 @@ def draw_repr(idx, path):
 
 # ──────────────────────────────────────────────── 데이터셋 해부 (발표 2번 장)
 
-ROLE = {"focal": ("점수를 받는 한 대", None), "av": ("데이터를 모은 차 (AV)", None),
-        "score": ("점수엔 안 들어가지만 끝까지 추적된 차", None),
-        "unscore": ("추적은 됐지만 평가 대상 아님", None),
-        "frag": ("조각 — 5초 중 일부만 보이다 끊긴 트랙", None)}
+# AV2 공식 이름 그대로 쓴다 — `av2.datasets.motion_forecasting.data_schema.TrackCategory`.
+# ⚠️ AV 는 TrackCategory 가 아니다. 공식 enum 은 넷뿐이고(TRACK_FRAGMENT 0 · UNSCORED_TRACK 1 ·
+#    SCORED_TRACK 2 · FOCAL_TRACK 3), 데이터를 모은 차는 `track_id == "AV"` 로 따로 뽑는다
+#    (`data_av2/av2_preprocess.py:136`). 그래서 'AV (ego)' 로만 적고 enum 번호를 붙이지 않는다.
+# 설명은 공식 docstring 을 옮긴 것이다(`TrackCategory` 의 Members 절).
+# ⚠️ SCORED_TRACK 을 "점수에 안 들어감" 으로 적지 말 것 — **들어간다.** 다만 우리가 하는
+#    단일 agent 챌린지가 아니라 **다중 agent 챌린지**에서 채점된다. 한 번 그렇게 틀렸다.
+ROLE = {"focal":   "FOCAL_TRACK · 장면을 만든 트랙 · 단일 agent 챌린지의 채점 대상",
+        "av":      "AV (ego) · 데이터를 모은 차",
+        "score":   "SCORED_TRACK · AV 와 관련된 고품질 트랙 · 다중 agent 챌린지에서 채점",
+        "unscore": "UNSCORED_TRACK · 품질은 쓸 만하나 채점 안 함 · 맥락 입력용",
+        "frag":    "TRACK_FRAGMENT · 몇 step 만 관측된 저품질 트랙"}
 
 
 def draw_anatomy(idx, path):
@@ -417,7 +425,7 @@ def draw_anatomy(idx, path):
         # ⚠️ 조각 트랙은 **보인 step 만** 그려야 한다. 전처리가 결측을 최근접 복사로 메워서
         #    그냥 그리면 한 점에 뭉친 꼬리가 생기고, "조각" 이라는 사실이 안 보인다.
         vis = p[pad[i]]
-        lab = None if c in seen else f"{ROLE[c][0]} · {cnt[c]}대"
+        lab = None if c in seen else f"{ROLE[c]} · {cnt[c]}대"
         seen.add(c)
         w = 4.2 if c == "focal" else (2.4 if c in ("av", "score") else 1.5)
         if len(vis) >= 2:
