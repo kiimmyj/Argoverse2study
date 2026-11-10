@@ -48,6 +48,55 @@ AV2 = [
 LEADER = ("leaderboard 1위 IMR (2026-11)", 0.5714)   # https://eval.ai/web/challenges/challenge-page/1719/leaderboard/4098 — brier-minFDE6 정렬 1위의 minADE6
 
 
+# ── 그림 3: 모델 × 데이터셋 — 각 논문이 결과를 보고한 데이터셋 ──────────────
+COLS = ["Argoverse 1", "Argoverse 2", "WOMD", "nuScenes", "highD·NGSIM"]
+# (모델, 연도, 보고한 데이터셋, 출처) — 본문·부록 표에 수치가 있는 것만
+MATRIX = [
+    ("VectorNet",        2020, ["Argoverse 1"],                      "https://arxiv.org/abs/2005.04259"),
+    ("LaneGCN",          2020, ["Argoverse 1"],                      "https://arxiv.org/abs/2007.13732"),
+    ("Trajectron++",     2020, ["nuScenes"],                         "https://arxiv.org/abs/2001.03093"),
+    ("PGP",              2021, ["nuScenes"],                         "https://arxiv.org/abs/2106.15004"),
+    ("HiVT",             2022, ["Argoverse 1"],                      "https://doi.org/10.1109/CVPR52688.2022.00862"),
+    ("MTR",              2022, ["Argoverse 2", "WOMD"],              "https://arxiv.org/abs/2209.13508"),
+    ("Wayformer",        2022, ["Argoverse 1", "WOMD"],              "https://arxiv.org/abs/2207.05844"),
+    ("QCNet",            2023, ["Argoverse 1", "Argoverse 2"],       "https://doi.org/10.1109/CVPR52729.2023.01713"),
+    ("ProphNet",         2023, ["Argoverse 1", "Argoverse 2"],       "https://arxiv.org/abs/2303.12071"),
+    ("Forecast-MAE",     2023, ["Argoverse 1", "Argoverse 2", "WOMD"], "https://arxiv.org/abs/2308.09882"),
+    ("LAformer",         2023, ["Argoverse 1", "nuScenes"],          "https://arxiv.org/abs/2302.13933"),
+    ("MotionLM",         2023, ["WOMD"],                             "https://arxiv.org/abs/2309.16534"),
+    ("MTR++",            2024, ["Argoverse 2", "WOMD"],              "https://arxiv.org/abs/2306.17770"),
+    ("EDA",              2024, ["WOMD"],                             "https://arxiv.org/abs/2312.09501"),
+    ("SIMPL",            2024, ["Argoverse 1", "Argoverse 2"],       "https://arxiv.org/abs/2402.02519"),
+    ("DeMo",             2024, ["Argoverse 1", "Argoverse 2", "WOMD", "nuScenes"], "https://arxiv.org/abs/2410.05982"),
+    ("SMART",            2024, ["WOMD"],                             "https://arxiv.org/abs/2405.15677"),
+    ("MFTraj",           2024, ["Argoverse 1", "highD·NGSIM"],       "https://arxiv.org/abs/2405.01266"),
+    ("FutureNet-LOF",    2025, ["Argoverse 1", "Argoverse 2"],       "https://arxiv.org/abs/2406.14422"),
+    ("Trajectory Mamba", 2025, ["Argoverse 1", "Argoverse 2"],       "https://arxiv.org/abs/2503.10898"),
+]
+
+
+def fig_matrix(size=(6.6, 5.4), fs=8.5):
+    fig, ax = plt.subplots(figsize=size, dpi=200)
+    n = len(MATRIX)
+    for i, (name, year, ds, _) in enumerate(MATRIX):
+        y = n - 1 - i
+        ax.hlines(y, -0.4, len(COLS) - 0.6, color=GRID, lw=0.6, zorder=0)
+        for d in ds:
+            ax.scatter(COLS.index(d), y, s=70, color=BLUE, edgecolor="white", linewidth=1.5, zorder=3)
+    for x in range(len(COLS)):
+        ax.vlines(x, -0.6, n - 0.4, color=GRID, lw=0.6, zorder=0)
+    ax.set_yticks(range(n), [f"{m[0]} ({m[1]})" for m in reversed(MATRIX)], fontsize=fs, color=INK)
+    ax.set_xticks(range(len(COLS)), [c.replace(" ", "\n", 1) if fs > 9 else c for c in COLS], fontsize=fs, color=INK)
+    ax.xaxis.tick_top()
+    ax.set_xlim(-0.5, len(COLS) - 0.5)
+    ax.set_ylim(-0.6, n - 0.4)
+    ax.tick_params(length=0)
+    for s in ax.spines.values():
+        s.set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
 def setup():
     path = [f for f in font_manager.findSystemFonts() if "NotoSansCJK" in f and "Regular" in f]
     if path:
@@ -115,7 +164,9 @@ def fig_av2():
 def main():
     setup()
     os.makedirs(OUT, exist_ok=True)
-    for name, fn in [("fig1_datasets.png", fig_datasets), ("fig2_av2_sota.png", fig_av2)]:
+    for name, fn in [("fig1_datasets.png", fig_datasets), ("fig2_av2_sota.png", fig_av2),
+                     ("fig3_model_dataset.png", fig_matrix),
+                     ("fig3_model_dataset_slide.png", lambda: fig_matrix((6.0, 4.75), 10))]:   # 슬라이드용: 글자 크게
         fig = fn()
         fig.savefig(os.path.join(OUT, name), facecolor="white")
         print("저장:", os.path.normpath(os.path.join(OUT, name)))
