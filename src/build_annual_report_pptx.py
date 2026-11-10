@@ -3,7 +3,7 @@
 
   python src/build_annual_report_pptx.py [가이드.pptx] [출력.pptx]
 
-구성: 데이터셋 조사 → 데이터셋별 SOTA 모델 활용 사례·비교 → 데이터셋 간 비교·시사점.
+구성(4장): 데이터셋 조사 → 데이터셋 특성 비교 → 데이터셋별 SOTA 활용 사례 → Argoverse 2 SOTA 비교·시사점.
 가이드 파일을 그대로 열어 3번 슬라이드(제목·부제·소제목·내용·그림 틀)를 복제하므로
 서체(NanumSquare)·색·위치가 팀 덱과 같다. 그림은 src/viz_annual_report.py 가 만든 PNG 를 쓴다.
 python-pptx 가 필요하다. 수치·용어는 docs/annual_report_dataset_sota.md 와 같고 출처도 거기 있다.
@@ -53,27 +53,14 @@ SLIDES = [
                   ("Argoverse 2", " — 6 s horizon, 2023년 이후 주 benchmark (QCNet, SIMPL, DeMo)"),
                   ("WOMD", " — joint prediction·generative·Sim Agents (MTR, MotionLM, SMART)"),
                   ("nuScenes", " — lane-graph·end-to-end perception·prediction (PGP, LAformer, ViP3D)"),
-                  ("highD·NGSIM", " — highway, 공식 benchmark 없음 (MFTraj)")],
-         source="출처: 각 모델 논문 (arXiv·DOI 링크는 보고서 본문 「출처」 표)"),
-
-    dict(kind="table_bullets", title="Argoverse 1 — SOTA 모델 비교",
-         table=dict(cols=["Model", "발표", "핵심 (원문 표기)", "minADE6", "minFDE6", "MR6"],
-                    widths=[1.9, 1.5, 5.4, 1.1, 1.1, 1.1], row_h=0.36, size=11, numeric=[3, 4, 5],
-                    rows=[["LaneGCN", "ECCV 2020", "lane graph, actor-map interactions", "0.870", "1.362", "0.162"],
-                          ["HiVT", "CVPR 2022", "translation-invariant scene representation, rotation-invariant spatial learning", "0.774", "1.169", "0.127"],
-                          ["Wayformer *", "ICRA 2023", "early fusion, latent query attention", "0.7675", "1.1615", "0.1186"],
-                          ["ProphNet", "CVPR 2023", "anchor-informed proposals", "0.7726", "1.1442", "0.1121"],
-                          ["QCNet", "CVPR 2023", "query-centric paradigm", "0.73", "1.07", "0.11"],
-                          ["SIMPL", "RA-L 2024", "symmetric global feature fusion", "0.793", "1.179", "0.123"],
-                          ["Trajectory Mamba", "CVPR 2025", "selective state-space model (SSM)", "0.72", "1.07", "0.09"]]),
-         bullets=[("test, K=6, 2 s → 3 s", " — * ensemble. minADE6 가 0.87 → 0.72 m 로 줄어 상위권 차이가 작아짐"),
-                  ("2023년 이후 모델은 Argoverse 1·2 를 함께 보고", " → 주 benchmark 가 Argoverse 2 로 이동")],
-         source="출처: arxiv.org/abs/2402.02519 (Table I: LaneGCN·HiVT·SIMPL) · arxiv.org/abs/2207.05844 · arxiv.org/abs/2303.12071 · doi.org/10.1109/CVPR52729.2023.01713 · arxiv.org/abs/2503.10898"),
+                  ("highD·NGSIM", " — highway, 공식 benchmark 없음 (MFTraj)"),
+                  ("같은 모델도 데이터셋마다 순위가 바뀜", " — Wayformer 는 WOMD 전 지표 1위, Argoverse 1 은 brier-minFDE 만 1위")],
+         source="출처: 각 모델 논문 (arXiv·DOI 링크는 보고서 본문 「출처」 표) · arxiv.org/abs/2207.05844"),
 
     dict(kind="table_fig", title="Argoverse 2 — SOTA 모델 비교 (본 과제 주 데이터)", fig="fig2_av2_sota.png",
          caption="그림 3. Argoverse 2 test minADE6 (K=6) — 논문 보고치, 점선: leaderboard 1위 (2026-11-10)",
          table=dict(cols=["Model", "발표", "minADE6", "minFDE6"],
-                    widths=[1.95, 1.45, 1.0, 1.0], row_h=0.36, size=11, numeric=[2, 3],
+                    widths=[1.95, 1.45, 1.0, 1.0], row_h=0.33, size=11, numeric=[2, 3],
                     rows=[["QCNet", "CVPR 2023", "0.65", "1.29"],
                           ["ProphNet", "CVPR 2023", "0.68", "1.33"],
                           ["Forecast-MAE", "ICCV 2023", "0.709", "1.392"],
@@ -83,44 +70,9 @@ SLIDES = [
                           ["FutureNet-LOF *", "ICRA 2025", "0.58", "1.07"],
                           ["IMR (1위)", "2025-09 제출", "0.5714", "1.0684"]]),
          note="test, K=6, 5 s → 6 s · * ensemble · IMR 은 leaderboard 1위(논문 미확인)",
-         source="출처: 각 모델 논문 (arxiv.org/abs/2303.12071 · 2308.09882 · 2402.02519 · 2410.05982 · 2503.10898 · 2406.14422, doi.org/10.1109/CVPR52729.2023.01713) · eval.ai/web/challenges/challenge-page/1719/leaderboard/4098"),
-
-    dict(kind="two_tables", title="WOMD · nuScenes — SOTA 모델 비교",
-         left=dict(label="WOMD — 1 s → 8 s, test, K=6",
-                   cols=["Model", "track", "minADE", "mAP", "Soft mAP"],
-                   widths=[2.3, 1.7, 0.8, 0.75, 0.85], row_h=0.36, size=10, numeric=[2, 3, 4],
-                   rows=[["Wayformer *", "Motion Prediction", "0.545", "0.419", "—"],
-                         ["MTR", "Motion Prediction", "0.6050", "0.4129", "—"],
-                         ["MTR++", "Motion Prediction", "0.5906", "0.4329", "—"],
-                         ["EDA", "Motion Prediction", "0.5718", "0.4401", "0.4510"],
-                         ["MTR v3 * (2024 1위)", "Motion Prediction", "—", "—", "0.4967"],
-                         ["MotionLM *", "Interaction Prediction", "0.8911", "0.2178", "—"],
-                         ["Parallel ModeSeq (2025 1위)", "Interaction Prediction", "—", "—", "0.2978"]]),
-         right=dict(label="nuScenes — 2 s → 6 s @2 Hz, test",
-                    cols=["Model", "발표", "minADE5", "minADE10"],
-                    widths=[1.6, 1.45, 1.0, 1.05], row_h=0.36, size=10, numeric=[2, 3],
-                    rows=[["Trajectron++", "ECCV 2020", "1.88", "—"],
-                          ["PGP", "CoRL 2021", "1.27", "—"],
-                          ["LAformer", "arXiv 2023", "1.19", "—"],
-                          ["DeMo", "NeurIPS 2024", "1.22", "0.89"]]),
-         bullets=[("WOMD", " — interaction 을 명시적으로 label → joint prediction·generative(Sim Agents) 의 주 무대, 순위는 mAP·Soft mAP"),
-                  ("nuScenes", " — full sensor suite 제공 → end-to-end perception·prediction(ViP3D, UniAD 계열) benchmark")],
-         note="* ensemble · nuScenes 값은 DeMo 논문 Table 2 한 표 기준",
-         source="출처: arxiv.org/abs/2207.05844 · 2209.13508 · 2306.17770 · 2312.09501 · 2309.16534 · 2410.05982 (Table 2) · Waymo 2024·2025 Challenge 1위 보고서 (storage.googleapis.com/waymo-uploads)"),
-
-    dict(kind="table_bullets", title="데이터셋 간 비교와 시사점",
-         table=dict(cols=["Dataset", "주로 쓰이는 연구 축", "대표 사례"],
-                    widths=[2.0, 6.2, 3.9], row_h=0.38, size=12,
-                    rows=[["Argoverse 1", "map encoding·invariance 의 초기 benchmark (2020~2022)", "VectorNet, LaneGCN, HiVT"],
-                          ["Argoverse 2", "긴 horizon(6 s) single·multi-agent forecasting, 현재 주 benchmark", "QCNet, DeMo, SIMPL, FutureNet-LOF"],
-                          ["WOMD", "joint prediction·generative·Sim Agents", "MTR, MotionLM, SMART"],
-                          ["nuScenes", "lane-graph 기반 예측, end-to-end perception·prediction", "PGP, LAformer, ViP3D"],
-                          ["highD · NGSIM", "highway(연속류) 예측", "MFTraj"]]),
-         bullets=[("같은 모델도 데이터셋마다 순위가 바뀜", " — Wayformer: WOMD 전 지표 1위 vs Argoverse 1 은 brier-minFDE 만 1위 · DeMo: nuScenes 에선 LAformer 에 짐"),
-                  ("성능 포화·ensemble 의존", " — Argoverse 2 상위권 minADE6 0.57~0.65 m, 상위 기록 다수가 ensemble"),
-                  ("거리 지표 외 평가 부재", " — WOSAC 2023 minADE 1위(QCNeXt 1.083)가 off-road likelihood 최하위(0.360)"),
-                  ("task 확장", " — Waymo 2025 Challenges: E2E Driving, Scenario Generation, Sim Agents, Interaction Prediction")],
-         source="출처: arxiv.org/abs/2207.05844 · arxiv.org/abs/2410.05982 · arxiv.org/abs/2405.15677 · eval.ai/web/challenges/challenge-page/1719/leaderboard/4098 · waymo.com/open/challenges"),
+         bullets=[("성능 포화·ensemble 의존", " — 상위권 minADE6 0.57~0.65 m, 상위 기록 다수가 ensemble"),
+                  ("거리 지표 외 평가 부재", " — WOSAC 2023 minADE 1위(QCNeXt 1.083)가 off-road likelihood 최하위(0.360)")],
+         source="출처: arxiv.org/abs/ 2303.12071 · 2308.09882 · 2402.02519 · 2410.05982 · 2503.10898 · 2406.14422 · 2405.15677 · doi.org/10.1109/CVPR52729.2023.01713 · eval.ai/web/challenges/challenge-page/1719"),
 ]
 
 
@@ -254,11 +206,16 @@ def build(slide, spec):
         top = 2.2 + t["row_h"] * (len(t["rows"]) + 1) + 0.3
         place(content, 0.6, top, 12.1, 6.85 - top)
         fill_bullets(content, spec["bullets"], 14, 4)
-    elif kind == "table_fig":                       # 왼쪽 표 + 오른쪽 그림
-        remove(content)
+    elif kind == "table_fig":                       # 왼쪽 표(+ 아래 글머리) + 오른쪽 그림
         t = spec["table"]
         add_table(slide, t, 0.6, 2.35)
-        add_text(slide, 0.6, 2.35 + t["row_h"] * (len(t["rows"]) + 1) + 0.12, 5.4, 0.5, spec["note"], 10.5)
+        bottom = 2.35 + t["row_h"] * (len(t["rows"]) + 1)
+        add_text(slide, 0.6, bottom + 0.1, 5.4, 0.3, spec["note"], 10.5)
+        if "bullets" in spec:
+            place(content, 0.6, bottom + 0.5, 5.4, 6.9 - bottom - 0.5)
+            fill_bullets(content, spec["bullets"], 13, 4)
+        else:
+            remove(content)
         put_figure(slide, frame, os.path.join(FIG, spec["fig"]), spec["caption"])
     elif kind == "two_tables":                      # 좌우 표 두 개 + 아래 글머리
         remove(frame)
