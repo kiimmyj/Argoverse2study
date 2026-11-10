@@ -3,7 +3,7 @@
 
   python src/build_annual_report_pptx.py [가이드.pptx] [출력.pptx]
 
-구성(4장): 데이터셋 조사 → 데이터셋 특성 비교 → 데이터셋별 SOTA 활용 사례 → Argoverse 2 SOTA 비교·시사점.
+구성(5장): 데이터셋 조사 → 데이터셋 특성 비교 → 데이터셋별 SOTA 활용 사례 → 데이터셋별 주요 task → Argoverse 2 SOTA 비교·시사점.
 가이드 파일을 그대로 열어 3번 슬라이드(제목·부제·소제목·내용·그림 틀)를 복제하므로
 서체(NanumSquare)·색·위치가 팀 덱과 같다. 그림은 src/viz_annual_report.py 가 만든 PNG 를 쓴다.
 python-pptx 가 필요하다. 수치·용어는 docs/annual_report_dataset_sota.md 와 같고 출처도 거기 있다.
@@ -56,6 +56,17 @@ SLIDES = [
                   ("highD·NGSIM", " — highway, 공식 benchmark 없음 (MFTraj)"),
                   ("같은 모델도 데이터셋마다 순위가 바뀜", " — Wayformer 는 WOMD 전 지표 1위, Argoverse 1 은 brier-minFDE 만 1위")],
          source="출처: 각 모델 논문 (arXiv·DOI 링크는 보고서 본문 「출처」 표) · arxiv.org/abs/2207.05844"),
+
+    dict(kind="table", title="데이터셋별 주요 활용 task",
+         table=dict(cols=["Dataset", "주 task (궤적 예측)", "대표 SOTA 모델", "그 외 task"],
+                    widths=[1.85, 3.75, 3.2, 3.3], row_h=0.62, size=12,
+                    rows=[["Argoverse 1", "single-agent motion forecasting (2 s → 3 s)", "VectorNet, LaneGCN, HiVT", "3D tracking"],
+                          ["Argoverse 2", "single-agent · multi-agent motion forecasting (5 s → 6 s)", "QCNet, QCNeXt, SIMPL, DeMo, FutureNet-LOF", "3D perception, point cloud forecasting (Sensor · Lidar Dataset)"],
+                          ["WOMD", "Motion Prediction, Interaction Prediction, Sim Agents", "MTR, EDA, MotionLM, SMART", "—"],
+                          ["nuScenes", "prediction challenge (2 s → 6 s), end-to-end perception · prediction · planning", "PGP, LAformer, ViP3D, UniAD 계열", "3D detection · tracking (원 과제)"],
+                          ["Lyft Level 5", "motion forecasting, motion planning, simulation", "—", "—"],
+                          ["highD · NGSIM", "highway trajectory prediction, lane change", "MFTraj", "scenario-based safety validation (highD)"]]),
+         source="출처: arxiv.org/abs/ 1911.02620 · 2301.00493 · 2104.10133 · 1903.11027 · 2006.14480 · 2208.01582 · 2405.01266 · doi.org/10.1109/ITSC.2018.8569552 · waymo.com/open/challenges"),
 
     dict(kind="table_fig", title="Argoverse 2 — SOTA 모델 비교 (본 과제 주 데이터)", fig="fig2_av2_sota.png",
          caption="그림 3. Argoverse 2 test minADE6 (K=6) — 논문 보고치, 점선: leaderboard 1위 (2026-11-10)",
