@@ -14,3 +14,6 @@ runs/*.npz
 !docs/figures/**/*.png
 # Claude Code 작업 트리 사본은 올리지 않는다
 .claude/worktrees/
+
+# 내보내기 산출물 — 생성물이라 추적하지 않는다 (src/export_spec_bundle.py)
+viz/export/
