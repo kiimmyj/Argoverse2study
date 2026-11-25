@@ -949,6 +949,114 @@ def write_doc(S):
     fill(R2DOC, "R2BANDS", r2_bands_block(S))
 
 
+# ────────────────────────────────────────────────────────────── 미팅용 — 규격
+
+# 모델별로 갈아 끼우는 자리. docs/action_output_head.md §4 와 같은 내용이다.
+SPEC_MODELS = [("SIMPL", "MLPDecoder 의 param_out 분기"),
+               ("Forecast-MAE", "디코더 좌표 회귀 MLP"),
+               ("DeMo", "모드별 궤적 회귀 머리"),
+               ("HiVT · QCNet", "Laplace 머리의 위치 평균")]
+
+# (vs R1, vs R0) → 그림에 쓸 짧은 읽기. 밴드 순서를 손으로 적지 않으려고 키로 받는다.
+_SHORT = {("이김", "이김"): "좌표를 이겼다",
+          ("이김", "구별 안 됨"): "R1 열세 전부 회복",
+          ("이김", "짐"): "결론이 갈린다",
+          ("구별 안 됨", "짐"): "짝 맞춤 효과 없음",
+          ("짐", "짐"): "더 나빠졌다",
+          ("구별 안 됨", "구별 안 됨"): "자가 너무 크다",
+          ("구별 안 됨", "이김"): "불가능", ("짐", "이김"): "불가능",
+          ("짐", "구별 안 됨"): "불가능"}
+_FILL = {"①": (C.C_GREEN, 0.16), "②": (C.C_BLUE, 0.15), "③": (C.C_YELLOW, 0.26),
+         "④": (C.C_ORANGE, 0.17), "⑤": (C.C_RED, 0.14)}
+
+
+def _box(ax, y, h, txt, face, edge, bold=False, fs=9.6):
+    """패널 ① 의 블록 하나. 좌표계는 0~1 축 분수."""
+    from matplotlib.patches import FancyBboxPatch
+    ax.add_patch(FancyBboxPatch((0.02, y), 0.52, h, boxstyle="round,pad=0.012",
+                                fc=face, ec=edge, lw=1.5, zorder=2))
+    ax.text(0.28, y + h / 2, txt, ha="center", va="center", fontsize=fs, zorder=3,
+            color=C.INK, fontweight="bold" if bold else "normal", linespacing=1.45)
+
+
+def fig_spec(plt, S):
+    """미팅용 규격 두 장 — ① 어디를 잘라 뽑았나 ② 결과 전에 못 박은 판정.
+
+    ⚠️ 그림 안의 모든 수치는 S 에서 온다. 손으로 적으면 자가 바뀔 때 그림만 낡는다.
+    ⚠️ matplotlib 은 마크다운을 모른다 — 별표를 넣으면 별표가 그려진다(두 번 겪음).
+    """
+    B = S.get("r2_bands")
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(13.2, 5.3),
+                                   gridspec_kw={"width_ratios": [1.0, 1.08]})
+
+    # ── ① 인터페이스
+    axL.set_xlim(0, 1); axL.set_ylim(0, 1); axL.axis("off")
+    axL.set_title("① 출력 머리 한 단계만 갈아 끼운다 — 적분기는 학습하지 않는다",
+                  fontsize=10.6, loc="left", color=C.INK)
+    rows = [(0.80, "기존 인코더 · 융합 · 모드 디코더\n(그대로 둔다)", "#f1f0ea", C.AXIS, False),
+            (0.555, "액션 머리  (새것)\n모드별 (a, Δθ) · T step", "#fde3d6", C.C_ORANGE, True),
+            (0.31, "f — 고정 적분기  (새것)\n학습 파라미터 0", "#d9e7f9", C.C_BLUE, True),
+            (0.065, "기존 손실 — 좌표 (x, y)\n(그대로 둔다)", "#f1f0ea", C.AXIS, False)]
+    for y, txt, fc, ec, bold in rows:
+        _box(axL, y, 0.155, txt, fc, ec, bold)
+    for y in (0.80, 0.555, 0.31):
+        axL.annotate("", xy=(0.28, y - 0.055), xytext=(0.28, y),
+                     arrowprops=dict(arrowstyle="-|>", color=C.INK2, lw=1.5))
+    # 모델 목록 — 액션 머리 높이에 맞춰 오른쪽에
+    axL.annotate("", xy=(0.57, 0.633), xytext=(0.70, 0.633),
+                 arrowprops=dict(arrowstyle="-|>", color=C.C_ORANGE, lw=1.6))
+    axL.text(0.72, 0.90, "붙이는 자리", fontsize=9.6, color=C.C_ORANGE, fontweight="bold")
+    for j, (m, where) in enumerate(SPEC_MODELS):
+        axL.text(0.72, 0.80 - j * 0.115, m, fontsize=9.4, color=C.INK, fontweight="bold")
+        axL.text(0.72, 0.755 - j * 0.115, where, fontsize=8.2, color=C.INK2)
+    axL.text(0.72, 0.30, "구조가\n「인코더 → 모드별 특징\n→ 미래 좌표 회귀」면\n마지막 한 단계만\n바꾸면 된다.",
+             fontsize=8.6, color=C.INK2, va="top", linespacing=1.6)
+
+    # ── ② 판정 밴드
+    axR.set_title("② 결과가 나오기 전에 다섯 밴드를 못 박았다 — 값을 보고 고를 자리가 없다",
+                  fontsize=10.6, loc="left", color=C.INK)
+    if not B:
+        axR.axis("off"); axR.text(0.5, 0.5, "로그 부족", ha="center")
+        return C.savefig(fig, OUT / "m_spec.png")
+    pad = 0.013
+    top, bot = B["cuts"][0] - pad, B["cuts"][-1] + pad     # 위가 좋은 쪽
+    axR.set_ylim(bot, top); axR.set_xlim(0, 1)
+    axR.set_ylabel("val minADE6   ↑ 위가 좋다")
+    axR.set_xticks([]); axR.spines["bottom"].set_visible(False)
+    for b in B["bands"]:
+        lo = b["lo"] if b["lo"] is not None else top
+        hi = b["hi"] if b["hi"] is not None else bot
+        col, al = _FILL.get(b["band"], (C.MUTED, 0.12))
+        axR.axhspan(lo, hi, color=col, alpha=al, zorder=1)
+        mid = (lo + hi) / 2
+        axR.text(0.035, mid, b["band"], fontsize=13, color=col, va="center",
+                 fontweight="bold", zorder=4)
+        axR.text(0.105, mid + 0.0022, _SHORT[(b["vs_r1"], b["vs_r0"])],
+                 fontsize=10.0, color=C.INK, va="center", fontweight="bold", zorder=4)
+        axR.text(0.105, mid - 0.0032, f"R2 {b['range']}", fontsize=8.6, color=C.INK2,
+                 va="center", zorder=4)
+    for c in B["cuts"]:
+        axR.axhline(c, color=C.AXIS, lw=1.0, ls="-", zorder=2)
+        axR.text(0.995, c, f"{c:.3f}", fontsize=8.0, color=C.INK2, ha="right",
+                 va="center", zorder=5,
+                 bbox=dict(fc=C.SURF, ec="none", pad=1.4))
+    for name, v, col in (("R0  원본 좌표", B["r0"], C.C_TOP), ("R1  (a,h) 입력", B["r1"], C.C_ORANGE)):
+        axR.axhline(v, color=col, lw=2.1, zorder=6)
+        axR.text(0.62, v - 0.0026, f"{name}  {v:.3f}", fontsize=9.2, color=col,
+                 fontweight="bold", va="bottom", zorder=7)
+    if B.get("check"):
+        c = B["check"]
+        axR.plot([0.575], [c["val"]], marker="D", ms=6.5, color=C.C_VIOLET, zorder=8)
+        axR.text(0.555, c["val"], f"시드만 바꾼 런 {c['val']:.3f} → {c['band']}  (칼금 위)", fontsize=8.4,
+                 color=C.C_VIOLET, ha="right", va="center", zorder=8)
+    # ⚠️ 왼쪽 위에 두면 밴드 ① 의 범위 글씨를 덮는다(2026-11-26 확인). 비어 있는 ⑤ 쪽으로.
+    axR.text(0.98, 0.03, f"자 = 시드만 바꾼 런 간 폭 {B['eps']:.3f}\n"
+                         f"칼금 = R0 ∓ 자 · R1 ∓ 자 (계산된다)",
+             transform=axR.transAxes, fontsize=8.6, color=C.INK2, va="bottom", ha="right",
+             bbox=dict(fc=C.SURF, ec=C.GRID, lw=0.9, pad=4.0), zorder=9)
+    fig.tight_layout()
+    return C.savefig(fig, OUT / "m_spec.png")
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-doc", action="store_true")
@@ -972,6 +1080,7 @@ if __name__ == "__main__":
     fig_curves(plt, S)
     fig_effect_vs_noise(plt, S)
     fig_meeting(plt, S)
+    print(f"  규격 그림 → {fig_spec(plt, S)}")
     if not a.no_doc:
         write_doc(S)
     print(f"  숫자 → {OUT / 'numbers.json'}")
