@@ -8,6 +8,9 @@
 > 아니다 — 기준선을 고정하면 `Δθ = Δh − Δk` 에서 `Δk = 0` 이라 둘이 같아지고, 차선이
 > 식에서 사라진다. 그래서 차선이 안 들어가는 이 문서에서는 `Δh` 로 적는다.
 
+**짝이 되는 문서.** 입력 쪽은 📘 **[`docs/action_input_repr.md`](action_input_repr.md)** 다.
+둘은 따로 써도 되지만, **같이 쓸 때는 `h` 의 프레임과 `a` 의 눈금을 맞춰야 한다.**
+
 **누구에게 쓰나.** SIMPL 에서 먼저 쓰지만(`docs/superpowers/specs/2026-11-25-r2-output-representation-design.md`),
 이 문서는 **모델에 의존하지 않는다.** Forecast-MAE · DeMo · HiVT/QCNet 계열처럼
 "인코더 → 모드별 미래 좌표 회귀" 구조면 어디든 같은 자리에 붙는다.
