@@ -193,6 +193,9 @@ def _centerline_cloud(amap, origin, theta, step=1.0):
         if s[-1] < 1e-6:
             continue
         q = np.arange(0.0, s[-1], step)
+        if len(q) < 2:          # step(1 m) 보다 짧은 차로 조각 — 점 하나라 np.gradient 가 죽는다.
+            q = np.array([0.0, s[-1]])   # 끝점 둘로 대신한다. 버리면 그 장면이 통째로 빠진다
+                                         # (val 300판 중 29판이 이것 때문에 날아갔다, 2026-11-25).
         p = np.stack([np.interp(q, s, cl[:, 0]), np.interp(q, s, cl[:, 1])], axis=1)
         t = np.gradient(p, axis=0)
         pts.append(p)
