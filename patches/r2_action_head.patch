@@ -1,0 +1,1428 @@
+From 5fa82699d931d8874561c45b1076fa6bd0c2e464 Mon Sep 17 00:00:00 2001
+From: kiimmyj <zxzxcv533@gmail.com>
+Date: Thu, 26 Nov 2026 01:21:47 +0900
+Subject: [PATCH] =?UTF-8?q?R2=20=E2=80=94=20=EC=B6=9C=EB=A0=A5=EB=8F=84=20?=
+ =?UTF-8?q?=EC=9B=80=EC=A7=81=EC=9E=84=20=ED=91=9C=ED=98=84=20(a,=20=CE=94?=
+ =?UTF-8?q?h)=20+=20=EA=B3=A0=EC=A0=95=20=EC=A0=81=EB=B6=84=EA=B8=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SIMPL_ACTION_OUT=1 이면 디코더의 베지어 제어점이 '위치' 가 아니라 '(a, Δh)'
+의 것이 되고, 학습 파라미터가 없는 f 가 좌표를 만든다. 시간축·머리 크기·손실은
+그대로다 — 바뀌는 것은 해석 하나.
+
+적분기에 순차 루프가 없다. 선회율 한계 D_MAX 가 v_{t-1} 에만 걸리는데 v 는 a
+만으로 먼저 구할 수 있어서 v → D_MAX → h → p 를 cumsum 세 번으로 푼다.
+저속 동결도 Δh 를 0 으로 두는 것과 동치라 조건부 대입이 필요 없다.
+
+오라클을 먼저 쟀다. 제약을 다 빼면 오차가 정확히 0 이고(적분기가 임의의
+폴리라인을 정확히 다시 적는다는 뜻), 설계 그대로면 ADE 중앙 0.013 m ·
+평균 0.070 m 다. 목표 0.795 보다 60배 아래라 표현이 천장이 되지 않는다.
+v4 는 오라클이 1.079 m 라 여기서 죽었다.
+
+초기화 상태에서 등속 직진을 예측한다 — act≈0 이면 v0 로 직진이다. 베지어
+랜덤 제어점보다 나은 출발점이고, 포화도 0% 라 하드 clip 이 기울기를 안 죽인다.
+
+증강은 collate 전에 도는 y축 뒤집기라 init_state 가 뒤집힌 장면을 읽는다.
+orig 경로는 bit 단위로 그대로다(verify_ah2 --task orig 통과).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .gitignore                      |   4 +-
+ config/simpl_av2_cfg.py         |   7 +-
+ run_r2.sh                       |  15 +++
+ simpl/action_head.py            |  86 +++++++++++++++
+ simpl/ah_feat.py                | 154 +++++++++++++++++++++++++++
+ simpl/av2_dataset.py            |  18 ++++
+ simpl/simpl.py                  |  35 +++++-
+ tools/cmp_r0_r1.py              |  53 ++++++++++
+ tools/measure_fill_share.py     |  85 +++++++++++++++
+ tools/measure_motion_quality.py | 167 +++++++++++++++++++++++++++++
+ tools/measure_quality_split.py  | 181 ++++++++++++++++++++++++++++++++
+ tools/oracle_action_head.py     | 104 ++++++++++++++++++
+ tools/run_qsplit.sh             |  18 ++++
+ tools/run_quality_split.sh      |  16 +++
+ tools/verify_action_head.py     |  76 ++++++++++++++
+ tools/verify_ah2.py             | 161 ++++++++++++++++++++++++++++
+ 16 files changed, 1173 insertions(+), 7 deletions(-)
+ create mode 100755 run_r2.sh
+ create mode 100644 simpl/action_head.py
+ create mode 100644 simpl/ah_feat.py
+ create mode 100644 tools/cmp_r0_r1.py
+ create mode 100644 tools/measure_fill_share.py
+ create mode 100644 tools/measure_motion_quality.py
+ create mode 100644 tools/measure_quality_split.py
+ create mode 100644 tools/oracle_action_head.py
+ create mode 100755 tools/run_qsplit.sh
+ create mode 100755 tools/run_quality_split.sh
+ create mode 100644 tools/verify_action_head.py
+ create mode 100644 tools/verify_ah2.py
+
+diff --git a/.gitignore b/.gitignore
+index 55cf2dc..033fb3b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -4,4 +4,6 @@
+ log/*
+ saved_models/20*
+ data_argo/features*
+-data_av2/features*
+\ No newline at end of file
++data_av2/features*
++# 측정 산출물 — 다시 돌리면 되고, 바이너리라 diff 가 안 된다
++tools/*.npz
+diff --git a/config/simpl_av2_cfg.py b/config/simpl_av2_cfg.py
+index 87f80d9..8f6510a 100644
+--- a/config/simpl_av2_cfg.py
++++ b/config/simpl_av2_cfg.py
+@@ -1,5 +1,6 @@
+ import os
+ import sys
++from simpl import ah_feat
+ 
+ 
+ class AdvCfg():
+@@ -20,7 +21,7 @@ class AdvCfg():
+         net_cfg = dict()
+         net_cfg["network"] = "simpl.simpl:Simpl"
+         net_cfg["init_weights"] = False
+-        net_cfg["in_actor"] = 14
++        net_cfg["in_actor"] = ah_feat.in_actor()  # orig 14 / ah2 11
+         net_cfg["d_actor"] = 128
+         net_cfg["n_fpn_scale"] = 4
+         net_cfg["in_lane"] = 16
+@@ -34,7 +35,9 @@ class AdvCfg():
+         net_cfg["dropout"] = 0.1
+         net_cfg["update_edge"] = True
+ 
+-        net_cfg["param_out"] = 'bezier'  # bezier/monomial/none
++        # R2 — 출력도 움직임 표현. 베지어 제어점이 '위치' 가 아니라 '(a, Δh)' 의 것이 된다.
++        # 시간축은 그대로 둔다 — 같이 바꾸면 변경이 둘이 되어 원인을 못 가른다.
++        net_cfg["param_out"] = 'action' if ah_feat.action_out() else 'bezier'
+         net_cfg["param_order"] = 7     # 7-th order polynomials
+ 
+         net_cfg.update(self.g_cfg)  # append global config
+diff --git a/run_r2.sh b/run_r2.sh
+new file mode 100755
+index 0000000..8329c0e
+--- /dev/null
++++ b/run_r2.sh
+@@ -0,0 +1,15 @@
++#!/bin/bash
++# R2 — 출력도 움직임 표현 (a, Δh) + 고정 적분기.
++# R1 과 다른 것은 SIMPL_ACTION_OUT 하나뿐이다. 입력은 R1 과 같은 ah2 11채널.
++# 한 칸에 하나씩만 바꾼다 — 그래야 R1 이 대조군으로 선다.
++set -u
++cd /home/user/av2_simpl
++PY=/home/user/miniforge3/envs/av2/bin/python
++export SIMPL_ACTOR_FEAT=ah2
++export SIMPL_ACTION_OUT=1
++echo "=== R2 시작 $(date '+%F %T') · git $(git rev-parse --short HEAD) · feat=$SIMPL_ACTOR_FEAT · action_out=$SIMPL_ACTION_OUT ==="
++CUDA_VISIBLE_DEVICES=0 $PY -u train.py \
++  --features_dir /data/argoverse2/simpl_features/ \
++  --train_batch_size 16 --val_batch_size 16 --val_interval 2 --train_epoches 50 --seed 42 \
++  --data_aug --use_cuda --logger_writer --no_pbar --adv_cfg_path config.simpl_av2_cfg
++echo "=== R2 끝 $(date '+%F %T') ==="
+diff --git a/simpl/action_head.py b/simpl/action_head.py
+new file mode 100644
+index 0000000..53c31f1
+--- /dev/null
++++ b/simpl/action_head.py
+@@ -0,0 +1,86 @@
++"""f — 고정 적분기. **학습 파라미터 0.**  `docs/action_output_head.md` §3 의 구현.
++
++머리가 매 step `(a, Δh)` 를 내면 여기서 좌표로 되돌린다. 모델은 "뭘 할지" 만 내고
++좌표를 만드는 일은 이 수식이 한다.
++
++눈금 — 입력과 맞춘다
++    a      속도 증분.  a = Δv[m/s] × A_SCALE   (= km/h 로 바꾼 뒤 3.0 으로 나눈 것)
++    Δh     진행방향 증분 [°/step].  라디안이면 O(0.01) 이라 머리가 아주 작은 수를 내야 한다
++
++**순차 루프가 없다.** 선회율 한계 D_MAX_t 가 v_{t-1} 에만 걸리는데 v 는 a 만으로 먼저
++구할 수 있다. 그래서 v → D_MAX → h → p 를 각각 한 번의 cumsum 으로 푼다. 60 step 을
++for 로 도는 구현과 결과가 같고 속도만 다르다.
++
++**저속 동결은 Δh 를 0 으로 두는 것과 같다.** h_t = h0 + Σ Δh 이므로, 멈춘 step 의 Δh 를
++지우면 그 구간 h 가 직전 값으로 유지된다 — 조건부 대입과 동치이고 미분 가능하다.
++"""
++import math
++
++import torch
++
++DT = 0.1
++A_SCALE = 1.2        # a = Δv[m/s] × 1.2 — ah_feat 의 (km/h ÷ 3.0) 과 같은 눈금
++A_MAX = 8.0          # [m/s²] 종가속 한계 — 타이어 마찰 μg ≈ 7.8 에서 (정답 꼬리가 아니다)
++A_LAT_MAX = 8.0      # [m/s²] 횡가속 한계
++V_FLOOR = 1.0        # [m/s] D_MAX 가 v→0 에서 발산하는 것을 막는다 (CoverNet 과 같은 이유)
++V_MIN = 0.5          # [m/s] 이 아래는 방향이 정의되지 않는다 — 동결 (ah_feat 입력 게이트와 같은 값)
++DEG = math.pi / 180.0
++
++
++def _sym_clamp(x, lim):
++    """|x| ≤ lim. lim 이 텐서여도 된다. 하드 clip 이라 밖에서는 기울기가 0 이다 —
++    포화하면 신호가 안 돌아오므로 `integrate` 가 포화 비율을 같이 돌려준다."""
++    return torch.maximum(torch.minimum(x, lim), -lim)
++
++
++def integrate(act, init, dt=DT, freeze_slow=True):
++    """[N,K,T,2] 액션 + [N,4] 초기상태 → (좌표 [N,K,T,2], 속도벡터 [N,K,T,2], 진단).
++
++    init 는 `ah_feat.init_state` 가 주는 (v0, h0, px0, py0) — **관측에서 읽는다.**
++    """
++    a, dh_in = act[..., 0], act[..., 1]                       # [N,K,T]
++    v0 = init[:, 0].view(-1, 1, 1)
++    h0 = init[:, 1].view(-1, 1, 1)
++    p0 = init[:, 2:4].view(-1, 1, 1, 2)
++
++    # ① 속도 — 종가속 한계로 자르고 누적. 음수 속도는 두지 않는다(방향이 이중 계산된다).
++    dv_lim = torch.as_tensor(A_MAX * dt, dtype=a.dtype, device=a.device)
++    dv = _sym_clamp(a / A_SCALE, dv_lim)
++    v = torch.clamp(v0 + torch.cumsum(dv, dim=-1), min=0.0)   # [N,K,T]
++
++    # ② 방향 — 선회율 한계는 **직전** 속도에서 나온다
++    v_prev = torch.cat([v0.expand(-1, v.shape[1], 1), v[..., :-1]], dim=-1)
++    d_max = (A_LAT_MAX / torch.clamp(v_prev, min=V_FLOOR)) * dt        # [rad/step]
++    dh = _sym_clamp(dh_in * DEG, d_max)
++    if freeze_slow:
++        dh = torch.where(v < V_MIN, torch.zeros_like(dh), dh)
++    h = h0 + torch.cumsum(dh, dim=-1)                          # [N,K,T]
++
++    # ③ 위치
++    u = torch.stack([torch.cos(h), torch.sin(h)], dim=-1)      # [N,K,T,2]
++    vel = v.unsqueeze(-1) * u
++    pos = p0 + torch.cumsum(vel * dt, dim=-2)
++
++    with torch.no_grad():
++        diag = {"sat_a": float(((a / A_SCALE).abs() > dv_lim).float().mean()),
++                "sat_dh": float(((dh_in * DEG).abs() > d_max).float().mean()),
++                "frozen": float((v < V_MIN).float().mean())}
++    return pos, vel, diag
++
++
++def invert(pos, init, dt=DT):
++    """f 의 역 — 궤적에서 액션을 뽑는다. **왕복 검증과 디버깅용이고 학습에는 안 쓴다**
++    (손실은 좌표 자리에 걸린다. `docs/action_output_head.md` §4).
++
++    ⚠️ 정확히 역함수가 아니다 — clip 과 저속 동결은 정보를 버리므로 되돌릴 수 없다.
++    그래서 왕복 오차가 0 이 **아닌** 자리가 생기고, 그 자리가 어디인지가 진단이다.
++    """
++    p = torch.cat([init[:, None, None, 2:4].expand(-1, pos.shape[1], 1, 2), pos], dim=-2)
++    d = torch.diff(p, dim=-2)
++    v = d.norm(dim=-1) / dt
++    h = torch.atan2(d[..., 1], d[..., 0])
++    h_prev = torch.cat([init[:, 1].view(-1, 1, 1).expand(-1, h.shape[1], 1), h[..., :-1]], -1)
++    dh = (h - h_prev + math.pi) % (2 * math.pi) - math.pi
++    v_prev = torch.cat([init[:, 0].view(-1, 1, 1).expand(-1, v.shape[1], 1), v[..., :-1]], -1)
++    a = (v - v_prev) * A_SCALE
++    return torch.stack([a, dh / DEG], dim=-1)
+diff --git a/simpl/ah_feat.py b/simpl/ah_feat.py
+new file mode 100644
+index 0000000..0f5ad07
+--- /dev/null
++++ b/simpl/ah_feat.py
+@@ -0,0 +1,154 @@
++"""(a, h) 2채널 actor 입력 — R1 전용. 원본 14채널 경로는 건드리지 않는다.
++
++환경변수 `SIMPL_ACTOR_FEAT`
++    orig (기본)   저자 원본 14채널 — 코드 경로가 완전히 그대로다
++    ah2           a(1) + cos h(1) + sin h(1) + object type(7) + validity(1) = 11채널
++
++왜 이렇게 쪼개 두나
++-------------------
++R0(원본)과 R1((a,h))의 차이를 입력 탓으로 돌리려면 **입력 말고는 아무것도 달라지면 안 된다.**
++그래서 분기를 env 하나로 두고, orig 쪽은 원본 코드를 글자 그대로 남겼다
++(`tools/verify_ah2.py --task orig` 가 두 경로의 텐서가 bit 단위로 같은지 대조한다).
++
++a 는 가속도가 아니다
++--------------------
++`a = diff(v[km/h], prepend=0) / 3.0` 이다. **누적합하면 속도가 그대로 돌아오고 첫 값이 v0 다.**
++정의 원본은 Argoverse2study `src/heading_decomp.py` 의 `ah_features` / `motion_repr.Motion.dv_kph`.
++
++⚠️ 창을 먼저 자르고 **그 다음에** 차분해야 한다
++-----------------------------------------------
++`actor_gather` 끝의 `actors[..., 2:]`(`# ! tmp solution`)가 50 step 중 앞 2개를 버린다.
++50 step 위에서 a 를 만든 뒤 자르면 a[0](=v0)이 통째로 날아가고 남는 것은 증분뿐이라
++누적합으로 속도를 복원할 수 없다. 그래서 여기서는 **속력을 48 step 으로 자른 뒤 차분**해
++a[0] 이 '창 시작 시점의 속력'이 되게 한다. ah2 분기는 뒤에서 다시 자르지 않는다.
++
++h 는 차체각이 아니다
++--------------------
++위치차분 진행방향이고, 위치차분이 무의미해지는 저속 구간만 AV2 heading(차체각)으로 메운다.
++이유는 슬립각이 아니라 **a 와의 무손실 복원 짝맞춤**이다 — 속력과 방향을 같은 위치 계열에서
++뽑아야 Σ|Δp|·unit(Δp) = ΣΔp 가 되어 복원이 정의상 0 이 된다(슬립각 실측 중앙 0.20°).
++
++**V_MIN = 0.5** (2026-11-02 사용자 확정). v4 는 1.0 이었다. 두 임계는 0.5 ≤ |v| < 1.0
++구간에서만 다르고(전체 step 의 5.3~5.7%), 거기서 fill@0.5 가 복원 p99 0.753 vs 1.595 m 로
++2.1배 낫다. 대가는 그 구간에 남는 1.5°/step 떨림이다(AV2 yaw 는 0.05°). 공짜가 아니다.
++
++**180° 뒤집힘 교정(align_ref)은 넣지 않는다.** 겨냥할 현상이 없다 — 이동거리로 층화하면
++트랙 중앙값 기준 뒤집힘이 20 m 이상 0.00% / 5~20 m 3.6% 이고, 큰 수치(0~2 m 45.1%)는
++'거의 안 움직여 비교 기준인 진행방향 자체가 안 서는' 트랙에서 나온다. v4 쪽 전수 조사도
++이 교정의 92.9% 가 차로 반대 방향을 만든다고 기록했다. 실제로 일하는 장치는 저속 게이트다.
++
++결측 처리는 원본과 같게 둔다
++----------------------------
++SIMPL 전처리(`padding_traj_nn`)는 결측 step 의 **위치를 최근접 관측값으로 복제**한다.
++그래서 결측 구간은 Δp = 0 → 속력 0 → 저속 게이트가 걸려 AV2 yaw(역시 복제값)로 메워진다.
++원본의 `traj_disp` 도 같은 구간에서 0 이므로 **결측 정책은 바뀌지 않는다.** 어느 step 이
++진짜인지는 `PAD_OBS` 채널이 그대로 들고 있다.
++"""
++import math
++import os
++
++import torch
++
++DT = 0.1
++V_MIN = 0.5             # [m/s] 이 미만은 위치차분 방향을 믿지 않는다
++JUMP_DEG = 30.0         # 보조(AV2 yaw)에만 거는 스텝당 변화 상한
++DV_SCALE = 3.0          # motion_repr.DEFAULT_SCALES["dv_kph"]
++MS_TO_KPH = 3.6
++TRIM = 2                # actors[..., 2:] 가 버리는 앞쪽 step 수
++
++_CH = {"orig": 14, "ah2": 11}
++
++
++def mode():
++    m = os.environ.get("SIMPL_ACTOR_FEAT", "orig").strip().lower()
++    if m not in _CH:
++        raise ValueError(f"SIMPL_ACTOR_FEAT 는 {sorted(_CH)} 중 하나여야 한다 (받은 값: {m!r})")
++    return m
++
++
++def in_actor(m=None):
++    return _CH[m or mode()]
++
++
++def action_out():
++    """R2 — 출력도 움직임으로 낼지. 환경변수 `SIMPL_ACTION_OUT` (0/1).
++
++    입력(SIMPL_ACTOR_FEAT)과 **따로** 둔다. 한 칸에 하나씩만 바꾸는 사다리라서,
++    입력만 바꾼 판(R1)과 출력만 더 바꾼 판(R2)이 각각 서야 한다.
++    """
++    return os.environ.get("SIMPL_ACTION_OUT", "0").strip() in ("1", "true", "on")
++
++
++def _wrap(a):
++    return (a + math.pi) % (2 * math.pi) - math.pi
++
++
++def _guard(h, jump_deg=JUMP_DEG):
++    """스텝당 |dh| 가 한계를 넘으면 직전 값 유지 — agent 축으로 벡터화한 순차 루프.
++
++    보조 신호(AV2 yaw)에만 건다. 위치차분 h 에 걸면 그 값을 얼려서 '복원이 무손실'이라는
++    이득이 사라진다(v4 실측 0.00 → 2.34 m).
++    """
++    lim = math.radians(jump_deg)
++    out = h.clone()
++    for t in range(1, out.shape[1]):
++        bad = _wrap(out[:, t] - out[:, t - 1]).abs() > lim
++        out[:, t] = torch.where(bad, out[:, t - 1], out[:, t])
++    return out
++
++
++def speed_and_heading(pos, yaw, dt=DT, v_min=V_MIN):
++    """[N,T,2] 위치 + [N,T] 차체각 → (속력 [N,T], 진행방향 [N,T], 출처 [N,T]).
++
++    출처: 1 = 위치차분, 2 = AV2 yaw 보조. `verify_ah2.py` 가 보조 비율을 재는 데 쓴다.
++    """
++    d = pos[:, 1:] - pos[:, :-1]                                  # [N,T-1,2]
++    spd = d.norm(dim=-1) / dt
++    v = torch.cat([spd, spd[:, -1:]], dim=1)                      # 마지막 값 복제
++
++    h_pd = torch.atan2(d[..., 1], d[..., 0])
++    h_pd = torch.cat([h_pd, h_pd[:, -1:]], dim=1)                 # 마지막 관측점은 직전 값 복제
++
++    ok = v >= v_min
++    h = torch.where(ok, h_pd, _guard(yaw))
++    return v, _wrap(h), torch.where(ok, 1, 2).to(torch.int8)
++
++
++def ah2_feat(traj, dt=DT, v_min=V_MIN, trim=TRIM):
++    """SIMPL `trajs[i]` dict → [N_a, 50-trim, 11] actor 입력."""
++    pos = traj["TRAJS_POS_OBS"].float()                           # [N,50,2] 정규화 프레임
++    ang = traj["TRAJS_ANG_OBS"].float()                           # [N,50,2] (cos, sin)
++    yaw = torch.atan2(ang[..., 1], ang[..., 0])                   # [N,50]
++
++    v, h, _ = speed_and_heading(pos, yaw, dt=dt, v_min=v_min)
++
++    v_w = v[:, trim:] * MS_TO_KPH                                 # 먼저 자르고
++    a = torch.diff(v_w, dim=1, prepend=v_w.new_zeros(v_w.shape[0], 1)) / DV_SCALE   # 그 다음 차분
++    h_w = h[:, trim:]
++
++    return torch.cat([a.unsqueeze(-1),
++                      torch.cos(h_w).unsqueeze(-1),
++                      torch.sin(h_w).unsqueeze(-1),
++                      traj["TRAJS_TYPE"][:, trim:].float(),
++                      traj["PAD_OBS"][:, trim:].unsqueeze(-1).float()], dim=-1)
++
++
++# ─────────────────────────────────────────────────── R2 — 적분기가 출발할 상태
++
++def init_state(traj, dt=DT, v_min=V_MIN):
++    """SIMPL `trajs[i]` dict → [N_a, 4] = (v0, h0, px0, py0).  관측 **끝** 상태다.
++
++    **예측하지 않고 관측에서 읽는다.** 60 step 적분이라 v0 오차 ε 가 끝점을 6ε m 민다 —
++    공짜로 아는 값을 굳이 틀릴 이유가 없다.
++
++    ⚠️ `speed_and_heading` 과 **같은 함수**를 쓴다. 인코더가 본 속도·방향과 적분기가
++    출발하는 속도·방향이 다른 물건이면 "입력과 출력이 같은 언어" 가 말뿐이 된다.
++
++    ⚠️ 마지막 칸은 `speed_and_heading` 이 직전 값을 복제한 것이다. 즉 v0/h0 는
++    **관측 마지막 전이**의 속력·방향이고, 그게 바로 우리가 원하는 '지금 상태' 다.
++    """
++    pos = traj["TRAJS_POS_OBS"].float()                     # [N,50,2] 정규화 프레임
++    ang = traj["TRAJS_ANG_OBS"].float()
++    yaw = torch.atan2(ang[..., 1], ang[..., 0])
++    v, h, _ = speed_and_heading(pos, yaw, dt=dt, v_min=v_min)
++    return torch.stack([v[:, -1], h[:, -1], pos[:, -1, 0], pos[:, -1, 1]], dim=-1)
+diff --git a/simpl/av2_dataset.py b/simpl/av2_dataset.py
+index 6c11a98..079cb47 100644
+--- a/simpl/av2_dataset.py
++++ b/simpl/av2_dataset.py
+@@ -11,6 +11,7 @@ import torch
+ from torch.utils.data import Dataset
+ #
+ from utils.utils import from_numpy
++from simpl import ah_feat
+ 
+ 
+ class AV2Dataset(Dataset):
+@@ -231,6 +232,11 @@ class AV2Dataset(Dataset):
+ 
+         data['ACTORS'] = actors
+         data['ACTOR_IDCS'] = actor_idcs
++        if ah_feat.action_out():
++            # R2 — 적분기가 출발할 상태(v0, h0, p0). **예측하지 않고 관측에서 읽는다.**
++            # actors 와 **같은 순서**로 이어 붙여야 actor_idcs 가 그대로 먹는다.
++            data['INIT_STATE'] = torch.cat(
++                [ah_feat.init_state(data['TRAJS'][i]) for i in range(data['BATCH_SIZE'])], 0)
+         data['LANES'] = lanes
+         data['LANE_IDCS'] = lane_idcs
+         return data
+@@ -239,6 +245,18 @@ class AV2Dataset(Dataset):
+         num_actors = [len(x['TRAJS_CTRS']) for x in trajs]
+         # print('num_actors: ', num_actors)
+ 
++        if ah_feat.mode() == 'ah2':
++            # R1 — (a, h) 2채널. 창(48 step)을 ah2_feat 안에서 먼저 자르므로
++            # 아래 orig 경로의 actors[..., 2:] 를 여기서 다시 걸지 않는다.
++            act_feats = [ah_feat.ah2_feat(trajs[i]) for i in range(batch_size)]
++            act_feats = [x.transpose(1, 2) for x in act_feats]
++            actors = torch.cat(act_feats, 0)  # [N_a, 11, 48]
++            actor_idcs, count = [], 0
++            for i in range(batch_size):
++                actor_idcs.append(torch.arange(count, count + num_actors[i]))
++                count += num_actors[i]
++            return actors, actor_idcs
++
+         act_feats = []
+         for i in range(batch_size):
+             traj_pos = trajs[i]['TRAJS_POS_OBS']
+diff --git a/simpl/simpl.py b/simpl/simpl.py
+index 25e2b6a..017f6e3 100644
+--- a/simpl/simpl.py
++++ b/simpl/simpl.py
+@@ -2,6 +2,9 @@ from typing import Any, Dict, List, Tuple, Union, Optional
+ import time
+ import math
+ import numpy as np
++
++from simpl import ah_feat
++from simpl import action_head as AH
+ import matplotlib.pyplot as plt
+ from matplotlib import cm
+ from math import gcd
+@@ -468,6 +471,19 @@ class MLPDecoder(nn.Module):
+             self.mat_T = self._get_T_matrix_monomial(n_order=self.N_ORDER, n_step=self.future_steps).to(self.device)
+             self.mat_Tp = self._get_Tp_matrix_monomial(n_order=self.N_ORDER, n_step=self.future_steps).to(self.device)
+ 
++            self.reg = nn.Sequential(
++                nn.Linear(self.hidden_size, self.hidden_size),
++                nn.LayerNorm(self.hidden_size),
++                nn.ReLU(inplace=True),
++                nn.Linear(self.hidden_size, self.hidden_size),
++                nn.LayerNorm(self.hidden_size),
++                nn.ReLU(inplace=True),
++                nn.Linear(self.hidden_size, (self.N_ORDER + 1) * 2)
++            )
++        elif self.param_out == 'action':
++            # R2 — 제어점이 '위치' 가 아니라 '(a, Δh)' 의 것이다. 크기·시간축은 bezier 와 같다.
++            # 변경은 **해석 하나**뿐이고, 좌표는 학습 파라미터가 없는 f 가 만든다.
++            self.mat_T = self._get_T_matrix_bezier(n_order=self.N_ORDER, n_step=self.future_steps).to(self.device)
+             self.reg = nn.Sequential(
+                 nn.Linear(self.hidden_size, self.hidden_size),
+                 nn.LayerNorm(self.hidden_size),
+@@ -527,7 +543,8 @@ class MLPDecoder(nn.Module):
+ 
+     def forward(self,
+                 embed: torch.Tensor,
+-                actor_idcs: List[Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
++                actor_idcs: List[Tensor],
++                init_state: Optional[Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+         # input embed: [159, 128]
+         embed = self.multihead_proj(embed).view(-1, self.num_modes, self.hidden_size).permute(1, 0, 2)
+         # print('embed: ', embed.shape)  # e.g., [6, 159, 128]
+@@ -545,6 +562,15 @@ class MLPDecoder(nn.Module):
+             param = param.permute(1, 0, 2, 3)  # e.g., [159, 6, N_ORDER + 1, 2]
+             reg = torch.matmul(self.mat_T, param)  # e.g., [159, 6, 30, 2]
+             vel = torch.matmul(self.mat_Tp, param[:, :, 1:, :]) / (self.future_steps * 0.1)
++        elif self.param_out == 'action':
++            assert init_state is not None, "param_out='action' 은 INIT_STATE 가 있어야 한다"
++            param = self.reg(embed).view(self.num_modes, -1, self.N_ORDER + 1, 2)
++            param = param.permute(1, 0, 2, 3)                    # [N, 6, N_ORDER+1, 2]
++            act = torch.matmul(self.mat_T, param)                # [N, 6, T, 2] = (a_t, Δh_t)
++            # 좌표도 속도벡터도 f 가 만든다 — yaw 손실이 쓰는 aux[0] 이 '같은 양의 충실한 이식'
++            # 이 되어야 손실 항이 유지되고 변경이 하나로 남는다.
++            reg, vel, self._diag = AH.integrate(act, init_state)
++            param = act
+         elif self.param_out == 'none':
+             reg = self.reg(embed).view(self.num_modes, -1, self.future_steps, 2)  # e.g., [6, 159, 30, 2]
+             reg = reg.permute(1, 0, 2, 3)  # e.g., [159, 6, 30, 2]
+@@ -591,7 +617,7 @@ class Simpl(nn.Module):
+             self.apply(init_weights)
+ 
+     def forward(self, data):
+-        actors, actor_idcs, lanes, lane_idcs, rpe = data
++        actors, actor_idcs, lanes, lane_idcs, rpe, init_state = data
+ 
+         # * actors/lanes encoding
+         actors = self.actor_net(actors)  # output: [N_{actor}, 128]
+@@ -599,7 +625,7 @@ class Simpl(nn.Module):
+         # * fusion
+         actors, lanes, _ = self.fusion_net(actors, actor_idcs, lanes, lane_idcs, rpe)
+         # * decoding
+-        out = self.pred_net(actors, actor_idcs)
++        out = self.pred_net(actors, actor_idcs, init_state)
+ 
+         return out
+ 
+@@ -618,8 +644,9 @@ class Simpl(nn.Module):
+         lanes = gpu(data['LANES'], self.device)
+         lane_idcs = gpu(data['LANE_IDCS'], self.device)
+         rpe = gpu(data['RPE'], self.device)
++        init_state = gpu(data['INIT_STATE'], self.device) if 'INIT_STATE' in data else None
+ 
+-        return actors, actor_idcs, lanes, lane_idcs, rpe
++        return actors, actor_idcs, lanes, lane_idcs, rpe, init_state
+ 
+     def post_process(self, out):
+         post_out = dict()
+diff --git a/tools/cmp_r0_r1.py b/tools/cmp_r0_r1.py
+new file mode 100644
+index 0000000..b5b1404
+--- /dev/null
++++ b/tools/cmp_r0_r1.py
+@@ -0,0 +1,53 @@
++"""R0 vs R1 같은 에폭 대조 — 입력 말고 다른 것이 다 같으므로 차이가 곧 (a, h) 효과다."""
++import re
++import sys
++
++
++def read(path):
++    rows, cur = [], None
++    try:
++        lines = open(path, errors="replace").read().splitlines()
++    except FileNotFoundError:
++        return []
++    for ln in lines:
++        m = re.match(r"^Epoch (\d+)", ln)
++        if m:
++            cur = {"ep": int(m.group(1))}; rows.append(cur); continue
++        if cur is None:
++            continue
++        m = re.search(r"\[Training\] Avg\. loss: ([\d.]+).*time cost: ([\d.]+).*lr: ([\d.e-]+)", ln)
++        if m:
++            cur["tr"], cur["min"], cur["lr"] = float(m.group(1)), float(m.group(2)), float(m.group(3)); continue
++        if "[Validation]" in ln:
++            cur["va"] = float(re.search(r"loss: ([\d.]+)", ln).group(1)); continue
++        m = re.search(r"minade_k: ([\d.]+) minfde_k: ([\d.]+) mr_k: ([\d.]+)", ln)
++        if m:
++            k = "v" if "va" in cur else "t"
++            cur[k + "ade"], cur[k + "fde"], cur[k + "mr"] = (float(m.group(i)) for i in (1, 2, 3))
++    return rows
++
++
++r0 = {r["ep"]: r for r in read("/home/user/av2_simpl/r0.log")}
++r1 = {r["ep"]: r for r in read("/home/user/av2_simpl/r1.log")}
++eps = sorted(e for e in r1 if "vade" in r1[e] and e in r0 and "vade" in r0[e])
++
++print("R0 (원본 14채널)  vs  R1 ((a,h) 11채널) — 입력 말고 전부 같다\n")
++print(f"{'에폭':>4} | {'R0 minADE6':>11} {'R1 minADE6':>11} {'차이':>8} | "
++      f"{'R0 val손실':>10} {'R1 val손실':>10} | {'R1 1에폭':>9}")
++print("-" * 82)
++for e in eps:
++    a, b = r0[e], r1[e]
++    d = b["vade"] - a["vade"]
++    print(f"{e:>4} | {a['vade']:>11.3f} {b['vade']:>11.3f} {d:>+8.3f} | "
++          f"{a['va']:>10.4f} {b['va']:>10.4f} | {b.get('min', 0):>7.1f}분")
++print()
++if eps:
++    e = eps[-1]
++    d = r1[e]["vade"] - r0[e]["vade"]
++    verdict = "R1 이 더 좋다" if d < 0 else ("R1 이 더 나쁘다" if d > 0 else "같다")
++    print(f"에폭 {e} 시점: {verdict} ({d:+.3f} m).")
++    print("⚠️ 초기 에폭 차이는 최종 결론이 아니다 — R0 은 에폭 5 에서 1.032 였지만 끝은 0.795 였다.")
++    print("   LR 감쇠(에폭 36~40)가 R0 에서 0.861 → 0.799 를 만들었다.")
++else:
++    print("아직 양쪽 모두 검증된 공통 에폭이 없다.")
++print(f"\nR1 진행: 에폭 {max(r1) if r1 else '-'} · 검증 {sum(1 for v in r1.values() if 'vade' in v)}회")
+diff --git a/tools/measure_fill_share.py b/tools/measure_fill_share.py
+new file mode 100644
+index 0000000..aa58115
+--- /dev/null
++++ b/tools/measure_fill_share.py
+@@ -0,0 +1,85 @@
++"""저속 보조(AV2 yaw fill)가 차지하는 step 비율 — 모집단을 명시해서 잰다.
++
++왜 이 스크립트가 따로 있나. 노트 §4-⑤ 의 65.3% 는 "1 m/s 미만" 기준이고, R1 이 실제로 쓰는
++임계는 0.5 다. 두 값을 같은 자로 재지 않으면 "임계를 낮춰도 보조 비율이 안 줄어든다"는
++§7-① 의 경고가 근거 없는 말이 된다. 모집단을 네 가지로 쪼개 함께 보고한다.
++
++  전체 step   — 모델이 실제로 먹는 것. padding_traj_nn 이 메운 결측 step 이 포함되고,
++                그 step 은 Δp = 0 이라 게이트가 반드시 걸린다.
++  유효 step   — PAD_OBS == 1 만. 패딩이 만든 인공적인 걸림을 뺀 수치.
++  focal       — 평가 대상 한 대. 노트의 옛 15.5% 와 같은 모집단.
++
++  python tools/measure_fill_share.py --n 400
++"""
++import argparse
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++from simpl import ah_feat
++from simpl.av2_dataset import AV2Dataset
++from utils.utils import from_numpy
++
++FEAT = "/data/argoverse2/simpl_features/val/"
++TYPES = ["차량", "보행자", "모터사이클", "자전거", "버스", "미확인", "정적/배경"]
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--n", type=int, default=400)
++    ap.add_argument("--thresholds", type=float, nargs="+", default=[0.5, 1.0])
++    a = ap.parse_args()
++
++    torch.set_num_threads(1)                     # 학습 워커와 CPU 를 다투지 않게
++    ds = AV2Dataset(FEAT, mode="val", verbose=False)
++    n = min(a.n, len(ds))
++    print(f"val {len(ds)}개 중 앞 {n}개 · trim={ah_feat.TRIM} (창 48 step)\n")
++
++    # [임계][모집단] 누적: (filled, total)
++    acc = {v: {k: np.zeros(2, dtype=np.int64) for k in ("all", "valid", "focal", "focal_valid")}
++           for v in a.thresholds}
++    by_type = {v: np.zeros((len(TYPES), 2), dtype=np.int64) for v in a.thresholds}
++
++    for i in range(n):
++        t = from_numpy([ds[i]])[0]["TRAJS"]
++        pos = t["TRAJS_POS_OBS"].float()
++        ang = t["TRAJS_ANG_OBS"].float()
++        yaw = torch.atan2(ang[..., 1], ang[..., 0])
++        pad = t["PAD_OBS"][:, ah_feat.TRIM:].bool().numpy()        # [N,48]
++        # 트랙 유형: 결측 step 은 전부 0 행이므로 시간축 최대로 트랙 단위 유형을 뽑는다
++        typ = t["TRAJS_TYPE"].numpy().max(axis=1).argmax(axis=1)   # [N]
++
++        for v in a.thresholds:
++            _, _, src = ah_feat.speed_and_heading(pos, yaw, v_min=v)
++            fil = (src[:, ah_feat.TRIM:] == 2).numpy()             # [N,48] True = 보조
++            acc[v]["all"] += [fil.sum(), fil.size]
++            acc[v]["valid"] += [(fil & pad).sum(), pad.sum()]
++            acc[v]["focal"] += [fil[0].sum(), fil[0].size]
++            acc[v]["focal_valid"] += [(fil[0] & pad[0]).sum(), pad[0].sum()]
++            for k in range(len(TYPES)):
++                m = typ == k
++                if m.any():
++                    by_type[v][k] += [fil[m].sum(), fil[m].size]
++
++    for v in a.thresholds:
++        print(f"=== V_MIN = {v} m/s ===")
++        print(f"{'모집단':<16}{'보조 비율':>10}{'보조 step':>14}{'전체 step':>14}")
++        for k, lab in (("all", "전체 agent"), ("valid", "전체·유효만"),
++                       ("focal", "focal"), ("focal_valid", "focal·유효만")):
++            f, tot = acc[v][k]
++            print(f"{lab:<16}{100*f/tot:>9.1f}%{f:>14,}{tot:>14,}")
++        print(f"\n{'유형(전체 step)':<16}{'보조 비율':>10}{'전체 step':>14}")
++        for k, lab in enumerate(TYPES):
++            f, tot = by_type[v][k]
++            if tot:
++                print(f"{lab:<16}{100*f/tot:>9.1f}%{tot:>14,}")
++        print()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/measure_motion_quality.py b/tools/measure_motion_quality.py
+new file mode 100644
+index 0000000..78b78b8
+--- /dev/null
++++ b/tools/measure_motion_quality.py
+@@ -0,0 +1,167 @@
++"""R2 선행 측정 — **방향 정확도 · 실현가능성 · 선회율 분포**를 R0/R1/s43 에서 먼저 잰다.
++
++왜 지금 재나
++------------
++R2 의 선례(DKM)에서 **위치 오차는 평평했다**(4.25 → 4.21). 이득은 전부 heading 품질과
++실현가능성에서 났는데, **minADE/minFDE/MR 은 그 둘을 안 잰다.** 그래서 R2 의 주 지표는
++아래 셋인데 — **R0·R1 에서 한 번도 잰 적이 없다.** 먼저 재 두지 않으면 R2 의 숫자는
++맞댈 상대가 없는 숫자가 된다. 학습이 아니라 추론이라 판당 몇 분이다.
++
++무엇을 재나 (예측 궤적에서, 입력 (a,h) 와 **같은 정의**로)
++    h      위치차분 진행방향.  관측 마지막 위치를 닻으로 써서 첫 step 도 정의된다
++    방향오차 |wrap(h_pred − h_gt)|, 양쪽 속력이 V_MIN 이상인 step 에서만
++    횡가속  v·ω,  종가속 Δv/dt      →  어느 한 step 이라도 한계를 넘으면 그 궤적은 위반
++    선회율  Δh [°/step] 의 분포      →  정답 분포와의 1-Wasserstein 거리
++
++⚠️ **정답도 같이 잰다.** 정답 궤적의 위반율이 곧 **잡음 바닥**이다. 정답이 30% 위반하는
++   한계에서 모델이 25% 를 냈다면 그건 좋은 게 아니다. `measure_kinematic_limits.py` 가
++   보여 줬듯 AV2 위치는 추적 출력이라 떨리고, 두 번 미분하면 그 떨림이 커진다.
++
++⚠️ **s43 도 잰다.** 이 지표들에도 런 간 잡음이 있다. 시드만 바꾼 런의 차이가 그 **자**다.
++   자가 없으면 R2 의 heading 이 좋아졌는지 아무 말도 못 한다.
++
++    python tools/measure_motion_quality.py --tag R0 --mode orig --model saved_models/<...>.tar
++"""
++import argparse
++import os
++import sys
++import time
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++FEAT = "/data/argoverse2/simpl_features/"
++PRED_LEN, DT, V_MIN = 60, 0.1, 0.5
++A_MAX = A_LAT_MAX = 8.0          # docs/action_output_head.md §3 — 타이어 마찰 μg≈7.8 에서
++HB = np.linspace(-180.0, 180.0, 721)      # 선회율 히스토그램 격자 (0.5°/칸)
++
++
++def wrap(a):
++    return (a + np.pi) % (2 * np.pi) - np.pi
++
++
++def kin(traj, anchor):
++    """[T,2] 궤적 + 닻(관측 마지막 위치) → 속력·진행방향·선회율·횡가속·종가속.
++
++    닻을 붙여야 **첫 step** 의 속력·방향이 정의된다. 안 붙이면 t=0 이 통째로 빠지는데,
++    거기가 적분기가 출발하는 자리다.
++    """
++    p = np.concatenate([anchor[None, :], traj], 0)          # [T+1,2]
++    d = np.diff(p, axis=0)                                  # [T,2]
++    v = np.linalg.norm(d, axis=-1) / DT                     # [T]
++    h = np.arctan2(d[:, 1], d[:, 0])                        # [T]
++    dh = wrap(np.diff(h))                                   # [T-1]
++    w = dh / DT
++    a_lat = v[:-1] * w
++    a_lon = np.diff(v) / DT
++    return v, h, np.degrees(dh), a_lat, a_lon
++
++
++def summarize(traj, anchor, gt_v, gt_h):
++    """예측 궤적 하나의 지표. gt_* 가 None 이면 정답 자신을 재는 것이다."""
++    v, h, dh_deg, a_lat, a_lon = kin(traj, anchor)
++    # ⚠️ "60 step 중 하나라도" 는 포화한다 — 정답조차 종가속에서 60% 가 걸린다.
++    #    step 단위 비율을 같이 낸다. 이쪽이 안 포화하고 차이를 본다.
++    e = {"alat_max": float(np.abs(a_lat).max()), "alon_max": float(np.abs(a_lon).max()),
++         "viol_lat": float(np.abs(a_lat).max() > A_LAT_MAX),
++         "viol_lon": float(np.abs(a_lon).max() > A_MAX),
++         "flat": float((np.abs(a_lat) > A_LAT_MAX).mean()),
++         "flon": float((np.abs(a_lon) > A_MAX).mean()),
++         "v_mean": float(v.mean())}
++    e["viol"] = float(e["viol_lat"] or e["viol_lon"])
++    if gt_h is not None:
++        g = (v >= V_MIN) & (gt_v >= V_MIN)                  # 방향이 양쪽 다 정의되는 step
++        e["n_gate"] = int(g.sum())
++        e["hd_err"] = float(np.degrees(np.abs(wrap(h[g] - gt_h[g]))).mean()) if g.any() else np.nan
++    return e, dh_deg
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--tag", required=True)
++    ap.add_argument("--mode", required=True, choices=["orig", "ah2"])
++    ap.add_argument("--model", required=True)
++    ap.add_argument("--features_dir", default=FEAT)
++    ap.add_argument("--batch", type=int, default=16)
++    ap.add_argument("--workers", type=int, default=8)
++    ap.add_argument("--limit", type=int, default=0)
++    a = ap.parse_args()
++
++    os.environ["SIMPL_ACTOR_FEAT"] = a.mode        # 데이터셋 import 전에 박아야 한다
++    from torch.utils.data import DataLoader
++    from loader import Loader
++    from simpl import ah_feat
++    assert ah_feat.mode() == a.mode
++
++    class _Args:
++        mode, features_dir = "val", a.features_dir
++        train_batch_size = val_batch_size = a.batch
++        use_cuda, data_aug = True, False
++        adv_cfg_path, model_path = "config.simpl_av2_cfg", a.model
++
++    device = torch.device("cuda", 0) if torch.cuda.is_available() else torch.device("cpu")
++    loader = Loader(_Args(), device, is_ddp=False)
++    loader.set_resmue(a.model)
++    (_, val_set), net, _, _, _ = loader.load()
++    net.eval()
++    if a.limit:
++        val_set.dataset_files = val_set.dataset_files[:a.limit]
++        val_set.dataset_len = len(val_set.dataset_files)
++    dl = DataLoader(val_set, batch_size=a.batch, shuffle=False, num_workers=a.workers,
++                    collate_fn=val_set.collate_fn, drop_last=False, pin_memory=True)
++
++    WHO = ("best", "top1", "gt")
++    rows = {w: [] for w in WHO}
++    hist = {w: np.zeros(len(HB) - 1, np.int64) for w in WHO}
++    t0 = time.time()
++    with torch.no_grad():
++        for bi, data in enumerate(dl):
++            post = net.post_process(net(net.pre_process(data)))
++            tp = post["traj_pred"].cpu().numpy()[..., :2]        # [B,K,T,2]
++            pp = post["prob_pred"].cpu().numpy()
++            for j in range(data["BATCH_SIZE"]):
++                t = data["TRAJS"][j]
++                fut = t["TRAJS_POS_FUT"][0].numpy().astype(np.float64)[:PRED_LEN]
++                anchor = t["TRAJS_POS_OBS"][0, -1].numpy().astype(np.float64)
++                gt_v, gt_h, _, _, _ = kin(fut, anchor)
++
++                # 정답 자신 — 잡음 바닥
++                e, dh = summarize(fut, anchor, None, None)
++                rows["gt"].append(e); hist["gt"] += np.histogram(dh, HB)[0]
++
++                pred = tp[j].astype(np.float64)[:, :PRED_LEN]
++                d = np.linalg.norm(pred - fut[None], axis=-1)
++                sel = {"best": int(np.argmin(d[:, -1])),             # minFDE 모드 (= minADE6 쓰는 모드)
++                       "top1": int(np.argsort(-pp[j], kind="stable")[0])}
++                for w, k in sel.items():
++                    e, dh = summarize(pred[k], anchor, gt_v, gt_h)
++                    rows[w].append(e); hist[w] += np.histogram(dh, HB)[0]
++            if bi % 200 == 0:
++                print(f"  배치 {bi:5d} · 장면 {len(rows['gt']):6,} · {time.time()-t0:6.1f}s", flush=True)
++
++    out = {}
++    for w in WHO:
++        for k in rows[w][0]:
++            out[f"{w}.{k}"] = np.array([r[k] for r in rows[w]], np.float32)
++        out[f"hist.{w}"] = hist[w]
++    out["hist_edges"] = HB
++    path = ROOT / "tools" / f"motion_{a.tag}.npz"
++    np.savez_compressed(path, **out)
++
++    print(f"\n{a.tag} · 장면 {len(rows['gt']):,} · {time.time()-t0:.1f}초 → {path}")
++    print(f"{'':6s}{'방향오차':>10s}{'궤적 위반 橫':>13s}{'縱':>8s}"
++          f"{'step 위반 橫':>14s}{'縱':>8s}")
++    for w in WHO:
++        hd = np.nanmean(out[f"{w}.hd_err"]) if f"{w}.hd_err" in out else float("nan")
++        print(f"{w:6s}{hd:>9.2f}°{np.mean(out[f'{w}.viol_lat'])*100:>12.1f}%"
++              f"{np.mean(out[f'{w}.viol_lon'])*100:>7.1f}%"
++              f"{np.mean(out[f'{w}.flat'])*100:>13.2f}%{np.mean(out[f'{w}.flon'])*100:>7.2f}%")
++    print("\n(정답 행이 잡음 바닥이다 — 모델 값을 그 아래로 읽으면 안 된다)")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/measure_quality_split.py b/tools/measure_quality_split.py
+new file mode 100644
+index 0000000..6d8815d
+--- /dev/null
++++ b/tools/measure_quality_split.py
+@@ -0,0 +1,181 @@
++"""입력 품질 분리 **측정** — 체크포인트는 그대로 두고, val 을 '주변 차 보조비율'로 쪼개 잰다.
++
++무엇을 가르려는 것인가
++----------------------
++R1 이 졌다(0.830 대 R0 0.795). 이유가 둘로 갈린다.
++  (a) **(a, h) 라는 표현 자체가 나쁘다**
++  (b) **표현은 괜찮은데 주변 차 입력을 뭉갰다** — h 를 위치차분으로 만들면 저속에서 떨려
++      0.5 m/s 아래는 AV2 yaw 로 메우는데, 그게 전 agent step 의 63.4% 에서 걸린다.
++      focal 은 13.3% 뿐이라 **뭉개진 쪽은 주변 차**이고, SIMPL 은 주변 차를 어텐션으로 본다.
++
++(b) 라면 **보조비율이 낮은 장면에서 R1 의 열세가 줄어야** 한다. (a) 라면 평평해야 한다.
++재학습(46시간) 없이 **기존 체크포인트로** 그 기울기를 본다.
++
++⚠️ 이 측정의 한계 둘 — 결론을 쓸 때 반드시 같이 적는다.
++  1. 더러운 입력으로 **학습된** 모델을 보는 것이다. "깨끗하게 학습시키면 낫다"의 증명이 아니다.
++  2. **자체 교란** — 보조비율이 낮은 장면은 차가 빨리 움직이는 장면이고, 원래 예측이 쉬울 수
++     있다. 그래서 버킷마다 **R0 자신의 오차**와 **focal 속력**을 같이 찍는다. R0 는 (a,h) 를
++     안 쓰므로 R0 의 버킷별 오차가 곧 "그 버킷이 원래 얼마나 어려운가"다.
++
++왜 s43 도 재나
++--------------
++버킷별 격차에도 잡음이 있다. **시드만 바꾼 s43 − R0 가 그 잡음의 눈금**이다. s43 의 버킷별
++격차가 평평하고 0 근처면, R1 의 기울기를 신호로 읽을 수 있다. 자가 없으면 아무 말도 못 한다.
++
++쓰는 법
++-------
++    python tools/measure_quality_split.py --tag R0  --mode orig --model saved_models/<...>.tar
++    python tools/measure_quality_split.py --tag R1  --mode ah2  --model saved_models/<...>.tar
++    python tools/measure_quality_split.py --tag s43 --mode orig --model saved_models/<...>.tar
++
++판마다 `tools/qsplit_<tag>.npz` 를 남긴다. 합치는 것은 Argoverse2study `src/analyze_quality_split.py`.
++
++**자체 검산**: 판별 지표를 전부 평균하면 그 런의 **에폭 49 검증값**이 나와야 한다
++(R0 0.795 · R1 0.830 · s43 0.801). 안 맞으면 체크포인트나 경로가 틀린 것이다 — 스크립트가 찍는다.
++"""
++import argparse
++import os
++import sys
++import time
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++FEAT = "/data/argoverse2/simpl_features/"
++MISS_THRES = 2.0        # config/simpl_av2_cfg.py eval_cfg['miss_thres']
++PRED_LEN = 60           # g_pred_len
++LOW_PROB = 0.05         # argo_eval_forecasting.LOW_PROB_THRESHOLD_FOR_METRICS
++
++
++def per_scene_metrics(traj_pred, prob_pred, traj_fut):
++    """[K,T,2] · [K] · [T,2] → 공식 정의와 **같은** 한 장면 지표.
++
++    ⚠️ SIMPL(=AV1 API)의 minADE 는 '모드별 ADE 의 최소'가 아니라
++    **minFDE 를 내는 모드의 ADE** 다. 여기서 헷갈리면 값이 조용히 작아진다.
++    확률 정렬은 `np.argsort(-p, kind="stable")` — 동점 순서까지 원본과 맞춘다.
++    """
++    idx = np.argsort(-prob_pred, kind="stable")
++    out = {}
++    for k, suf in ((1, "1"), (6, "6")):
++        sel = idx[:k]
++        p = prob_pred[sel]
++        p = p / p.sum()
++        tr = traj_pred[sel, :PRED_LEN, :2]
++        d = np.linalg.norm(tr - traj_fut[None, :PRED_LEN, :], axis=-1)   # [k,T]
++        fde = d[:, -1]
++        j = int(np.argmin(fde))                       # 최소 FDE 모드
++        out[f"fde{suf}"] = float(fde[j])
++        out[f"ade{suf}"] = float(d[j].mean())         # 그 모드의 ADE
++        out[f"mr{suf}"] = float(fde[j] > MISS_THRES)
++        out[f"brier{suf}"] = float((1.0 - p[j]) ** 2 + fde[j])
++    return out
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--tag", required=True, help="R0 / R1 / s43")
++    ap.add_argument("--mode", required=True, choices=["orig", "ah2"])
++    ap.add_argument("--model", required=True)
++    ap.add_argument("--features_dir", default=FEAT)
++    ap.add_argument("--batch", type=int, default=16)
++    ap.add_argument("--workers", type=int, default=8)
++    ap.add_argument("--limit", type=int, default=0, help="앞 N 장면만 (연습용)")
++    a = ap.parse_args()
++
++    # ⚠️ 데이터셋 import **전에** 환경변수를 박는다. collate_fn 이 ah_feat.mode() 를
++    #    매번 읽긴 하지만, DataLoader 워커는 fork 시점의 환경을 물려받는다.
++    os.environ["SIMPL_ACTOR_FEAT"] = a.mode
++
++    from torch.utils.data import DataLoader
++    from loader import Loader
++    from simpl import ah_feat
++
++    assert ah_feat.mode() == a.mode, f"env 가 안 먹었다: {ah_feat.mode()} != {a.mode}"
++
++    class _Args:                      # Loader 가 argparse 네임스페이스를 기대한다
++        mode = "val"
++        features_dir = a.features_dir
++        train_batch_size = a.batch
++        val_batch_size = a.batch
++        use_cuda = True
++        data_aug = False              # val 은 어차피 aug=False 로 만들어진다
++        adv_cfg_path = "config.simpl_av2_cfg"
++        model_path = a.model
++
++    device = torch.device("cuda", 0) if torch.cuda.is_available() else torch.device("cpu")
++    loader = Loader(_Args(), device, is_ddp=False)
++    loader.set_resmue(a.model)
++    (_, val_set), net, _, _, _ = loader.load()
++    net.eval()
++
++    if a.limit:     # dataset_len 은 __init__ 에서 한 번 캐시된다 — 같이 줄여야 한다
++        val_set.dataset_files = val_set.dataset_files[:a.limit]
++        val_set.dataset_len = len(val_set.dataset_files)
++
++    dl = DataLoader(val_set, batch_size=a.batch, shuffle=False, num_workers=a.workers,
++                    collate_fn=val_set.collate_fn, drop_last=False, pin_memory=True)
++
++    rows, seq_ids = [], []
++    t0 = time.time()
++    with torch.no_grad():
++        for bi, data in enumerate(dl):
++            out = net(net.pre_process(data))
++            post = net.post_process(out)
++            tp = post["traj_pred"].cpu().numpy()        # [B,K,T,>=2]
++            pp = post["prob_pred"].cpu().numpy()        # [B,K]
++
++            for j in range(data["BATCH_SIZE"]):
++                t = data["TRAJS"][j]
++                fut = t["TRAJS_POS_FUT"][0].numpy().astype(np.float32)
++                m = per_scene_metrics(tp[j].astype(np.float32), pp[j].astype(np.float32), fut)
++
++                # ── 보조비율. ah2_feat 과 **같은 창**(TRIM 뒤)에서, 같은 함수로 센다.
++                pos = t["TRAJS_POS_OBS"].float()
++                ang = t["TRAJS_ANG_OBS"].float()
++                yaw = torch.atan2(ang[..., 1], ang[..., 0])
++                v, _, src = ah_feat.speed_and_heading(pos, yaw)
++                fil = (src[:, ah_feat.TRIM:] == 2).numpy()          # [N,48] True = 보조
++                pad = t["PAD_OBS"][:, ah_feat.TRIM:].bool().numpy()  # True = 진짜 관측
++
++                sur = slice(1, None)                                 # 0 번이 focal
++                def share(f, p=None):
++                    if p is None:
++                        return float(f.mean()) if f.size else np.nan
++                    return float(f[p].mean()) if p.sum() else np.nan
++
++                m.update(
++                    n_agent=int(fil.shape[0]),
++                    fill_sur=share(fil[sur]),
++                    fill_sur_valid=share(fil[sur], pad[sur]),
++                    fill_focal=share(fil[0:1]),
++                    fill_focal_valid=share(fil[0:1], pad[0:1]),
++                    # 난이도 대조군 — 버킷이 원래 쉬운지 어려운지 보려고 같이 찍는다
++                    focal_v=float(v[0, ah_feat.TRIM:].mean()),
++                    fut_disp=float(np.linalg.norm(fut[-1] - fut[0])),
++                )
++                rows.append(m)
++                seq_ids.append(str(data["SEQ_ID"][j]))      # AV2 는 UUID 문자열이다
++
++            if bi % 200 == 0:
++                print(f"  배치 {bi:5d} · 장면 {len(rows):6,} · {time.time()-t0:6.1f}s", flush=True)
++
++    keys = sorted(rows[0])
++    arr = {k: np.array([r[k] for r in rows]) for k in keys}
++    arr["seq_id"] = np.array(seq_ids)          # 두 판을 장면 단위로 맞출 열쇠
++    out_path = ROOT / "tools" / f"qsplit_{a.tag}.npz"
++    np.savez_compressed(out_path, **arr)
++
++    print(f"\n{a.tag} · 장면 {len(rows):,}개 · {time.time()-t0:.1f}초 → {out_path}")
++    print(f"  minADE6 {arr['ade6'].mean():.4f} · minFDE6 {arr['fde6'].mean():.4f} · "
++          f"MR6 {arr['mr6'].mean():.4f} · minADE1 {arr['ade1'].mean():.4f}")
++    print(f"  보조비율 — 주변 {np.nanmean(arr['fill_sur']):.3f} (유효만 "
++          f"{np.nanmean(arr['fill_sur_valid']):.3f}) · focal {np.nanmean(arr['fill_focal']):.3f}")
++    print("  ⚠️ 위 minADE6 가 그 런의 에폭 49 검증값과 다르면 체크포인트·경로가 틀린 것이다.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/oracle_action_head.py b/tools/oracle_action_head.py
+new file mode 100644
+index 0000000..f3232ec
+--- /dev/null
++++ b/tools/oracle_action_head.py
+@@ -0,0 +1,104 @@
++"""적분기의 **오라클 오차** — f 가 낼 수 있는 가장 좋은 궤적이 정답에서 얼마나 떨어지나.
++
++왜 이걸 먼저 재나
++-----------------
++왕복 검증은 "정답을 액션으로 풀었다 되돌리면 제자리냐" 를 묻는데, clip 과 저속 동결이
++정보를 버리므로 당연히 안 맞는 자리가 생긴다. **그게 문제인지 아닌지는 다른 질문이다** —
++모델은 정답을 역산하지 않고, 정답에 **가장 가까운** 궤적을 찾으면 된다.
++
++그래서 묻는다: 액션을 자유롭게 고를 때 f 가 도달할 수 있는 **최선의 ADE** 는 얼마인가.
++이것이 R2 의 **바닥**이다. 바닥이 현재 minADE6(0.795)보다 크면 R2 는 시작부터 진다.
++
++v4 가 바로 여기서 죽었다 — 후보 경로 집합의 오라클조차 정답에서 평균 1.079 m 떨어져
++있었고, 그게 당시 minADE6 와 같은 자릿수였다. **46시간을 쓰기 전에 재는 게 맞다.**
++
++세 조건을 나란히 둔다
++    자유       clip 없음 · 동결 없음      — 적분기 구조 자체의 한계만
++    clip       물리 상한만
++    clip+동결  실제 설계 그대로           ← 이것이 R2 의 바닥
++
++    python tools/oracle_action_head.py --n 500 --iters 400
++"""
++import argparse
++import pickle
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++from simpl import ah_feat
++from simpl import action_head as AH
++
++VAL = Path("/data/argoverse2/simpl_features/val")
++
++
++def fit(fut, init, clip, freeze, iters, lr=0.05):
++    """정답에 가장 가까운 액션을 찾는다. f 가 미분 가능하니 그냥 경사하강이다."""
++    act = AH.invert(fut, init).clone().float().requires_grad_(True)     # 정답 역산으로 출발
++    init32, fut32 = init.float(), fut.float()
++    opt = torch.optim.Adam([act], lr=lr)
++    a_max = AH.A_MAX if clip else 1e9
++    lat_max = AH.A_LAT_MAX if clip else 1e9
++    # ⚠️ **Adam 은 완벽한 출발점에서 벗어난다.** 기울기가 0 에 가까워도 크기로 정규화하므로
++    #    한 스텝이 lr 만큼 움직인다. 제약 없는 조건은 역산 출발점이 이미 정답이라, 마지막
++    #    값만 보면 바닥이 부풀어 보인다. **샘플마다 지금까지의 최선**을 들고 간다.
++    best_ade = best_fde = None
++    for it in range(iters + 1):
++        saved = (AH.A_MAX, AH.A_LAT_MAX)
++        AH.A_MAX, AH.A_LAT_MAX = a_max, lat_max
++        pos, _, _ = AH.integrate(act, init32, freeze_slow=freeze)
++        AH.A_MAX, AH.A_LAT_MAX = saved
++        d = (pos - fut32).norm(dim=-1)[:, 0]                  # [N,T]
++        with torch.no_grad():
++            ade, fde = d.mean(-1), d[:, -1]
++            if best_ade is None:
++                best_ade, best_fde = ade.clone(), fde.clone()
++            else:
++                m = ade < best_ade
++                best_ade = torch.where(m, ade, best_ade)
++                best_fde = torch.where(m, fde, best_fde)
++        if it == iters:
++            break
++        opt.zero_grad()
++        d.mean().backward()
++        opt.step()
++    return best_ade.numpy(), best_fde.numpy()
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--n", type=int, default=500)
++    ap.add_argument("--iters", type=int, default=400)
++    a = ap.parse_args()
++
++    F, I = [], []
++    for f in sorted(VAL.glob("*.pkl"))[:a.n]:
++        T = pickle.load(open(f, "rb")).iloc[0]["TRAJS"]
++        pos = torch.from_numpy(np.asarray(T["trajs_pos"], np.float64))
++        ang = torch.from_numpy(np.asarray(T["trajs_ang"], np.float64))
++        obs = {"TRAJS_POS_OBS": pos[:1, :50],
++               "TRAJS_ANG_OBS": torch.stack([ang[:1, :50].cos(), ang[:1, :50].sin()], -1)}
++        I.append(ah_feat.init_state(obs).double())          # focal 만 — 점수를 받는 대상
++        F.append(pos[:1, 50:].unsqueeze(1))
++    init, fut = torch.cat(I, 0), torch.cat(F, 0)
++    print(f"focal {init.shape[0]:,}대 · Adam {a.iters}스텝\n")
++
++    print(f"{'조건':22s}{'ADE 중앙':>11s}{'평균':>9s}{'p90':>9s}{'FDE 중앙':>11s}{'평균':>9s}")
++    out = {}
++    for nm, clip, frz in (("자유 (상한·동결 없음)", False, False),
++                          ("clip 만", True, False),
++                          ("clip + 동결  ← 설계", True, True)):
++        ade, fde = fit(fut, init, clip, frz, a.iters)
++        out[nm] = (ade, fde)
++        print(f"{nm:22s}{np.median(ade):>10.4f}m{ade.mean():>8.4f}m{np.percentile(ade,90):>8.4f}m"
++              f"{np.median(fde):>10.4f}m{fde.mean():>8.4f}m")
++    print(f"\n비교 — 현재 R0 의 minADE6 = 0.795 m (6개 모드 중 best)")
++    print("오라클은 모드 1개로 낸 값이라 더 엄격한 조건이다. 이 바닥이 0.795 근처면 위험하다.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/run_qsplit.sh b/tools/run_qsplit.sh
+new file mode 100755
+index 0000000..03bbbf6
+--- /dev/null
++++ b/tools/run_qsplit.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++# 입력 품질 분리 측정 — 세 체크포인트를 val 전수로 재평가해 장면별 수치를 남긴다.
++# s43 도 재는 이유: 버킷별 격차의 **잡음 눈금**이 필요하다(시드만 바꾼 차이).
++set -u
++cd /home/user/av2_simpl
++PY=/home/user/miniforge3/envs/av2/bin/python
++run() {  # tag mode 런ID
++  echo "=== $1 시작 $(date '+%F %T') ==="
++  CUDA_VISIBLE_DEVICES=0 $PY -u tools/measure_quality_split.py \
++    --tag "$1" --mode "$2" --model "saved_models/$3_Simpl_epoch50.tar" 2>&1 | grep -v "^  배치"
++  rc=${PIPESTATUS[0]}            # ⚠️ 파이프라서 $? 는 grep 것이다
++  echo "=== $1 끝 $(date '+%F %T') · 종료코드 $rc ==="
++  [ "$rc" -eq 0 ] || exit "$rc"
++}
++run R0  orig 20261029-100547
++run R1  ah2  20261102-102825
++run s43 orig 20261104-083925
++echo "=== 셋 다 끝 $(date '+%F %T') ==="
+diff --git a/tools/run_quality_split.sh b/tools/run_quality_split.sh
+new file mode 100755
+index 0000000..bbee93b
+--- /dev/null
++++ b/tools/run_quality_split.sh
+@@ -0,0 +1,16 @@
++#!/bin/bash
++# 입력 품질 분리 측정 — 세 체크포인트를 val 전수로 재평가해 장면별 수치를 남긴다.
++# s43 도 같이 재는 이유: 버킷별 격차의 **잡음 눈금**이 필요하다(시드만 바꾼 차이).
++set -u
++cd /home/user/av2_simpl
++PY=/home/user/miniforge3/envs/av2/bin/python
++run () {  # tag mode ckpt
++  echo "=== $1 시작 $(date '+%F %T') ==="
++  CUDA_VISIBLE_DEVICES=0 $PY -u tools/measure_quality_split.py \
++    --tag "$1" --mode "$2" --model "saved_models/$3" 2>&1 | grep -vE "^-- |^\[Dataset\]|^\[Loader\]"
++  echo "=== $1 끝 $(date '+%F %T') ==="   # ⚠️ 종료코드는 여기 쓰지 않는다 — $(date) 가 덮는다
++}
++run R0  orig 20261029-100547_Simpl_epoch50.tar
++run R1  ah2  20261102-102825_Simpl_epoch50.tar
++run s43 orig 20261104-083925_Simpl_epoch50.tar
++echo "=== 전부 끝 $(date '+%F %T') ==="
+diff --git a/tools/verify_action_head.py b/tools/verify_action_head.py
+new file mode 100644
+index 0000000..5926383
+--- /dev/null
++++ b/tools/verify_action_head.py
+@@ -0,0 +1,76 @@
++"""f 왕복 검증 — 정답 궤적을 액션으로 풀었다가 되돌리면 제자리에 오나.
++
++이게 통과해야 "모델은 뭘 할지만 내고 좌표는 수식이 만든다" 가 성립한다.
++안 통과하면 적분기나 초기상태가 틀린 것이고, 학습을 돌려 봐야 원인을 못 찾는다.
++
++⚠️ **완전한 역함수가 아니다.** clip 과 저속 동결은 정보를 버린다. 그래서
++   ① 한계 안에 있고 ② 안 멈춘 궤적에서는 오차가 수치 한계여야 하고,
++   ③ 한계를 넘거나 멈춘 궤적에서는 **오차가 나는 게 맞다.** 둘을 갈라서 찍는다.
++
++    python tools/verify_action_head.py --n 2000
++"""
++import argparse
++import pickle
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++from simpl import ah_feat
++from simpl.action_head import integrate, invert, A_MAX, A_LAT_MAX, V_MIN, DT
++
++VAL = Path("/data/argoverse2/simpl_features/val")
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--n", type=int, default=2000)
++    a = ap.parse_args()
++
++    files = sorted(VAL.glob("*.pkl"))[:a.n]
++    err, sat_a, sat_h, frz, nag = [], [], [], [], 0
++    for f in files:
++        T = pickle.load(open(f, "rb")).iloc[0]["TRAJS"]
++        pos_all = torch.from_numpy(np.asarray(T["trajs_pos"], np.float64))      # [N,110,2]
++        ang_all = torch.from_numpy(np.asarray(T["trajs_ang"], np.float64))
++        obs = {"TRAJS_POS_OBS": pos_all[:, :50],
++               "TRAJS_ANG_OBS": torch.stack([ang_all[:, :50].cos(), ang_all[:, :50].sin()], -1)}
++        init = ah_feat.init_state(obs).double()                                  # [N,4]
++        fut = pos_all[:, 50:].unsqueeze(1)                                       # [N,1,60,2]
++
++        act = invert(fut, init)                                                  # 정답 → 액션
++        rec, _, d = integrate(act, init)                                         # 액션 → 좌표
++        e = (rec - fut).norm(dim=-1)[:, 0]                                       # [N,60]
++        err.append(e[:, -1].numpy())                                             # 끝점 오차
++        # 궤적별 — 한계를 넘었나 / 멈췄나
++        v = (fut[:, 0, 1:] - fut[:, 0, :-1]).norm(dim=-1) / DT
++        sat_a.append(((act[:, 0, :, 0].abs() / 1.2) > A_MAX * DT).any(-1).numpy())
++        sat_h.append((act[:, 0, :, 1].abs() > 45).any(-1).numpy())
++        frz.append((v < V_MIN).any(-1).numpy())
++        nag += init.shape[0]
++
++    e = np.concatenate(err); sa = np.concatenate(sat_a)
++    sh = np.concatenate(sat_h); fz = np.concatenate(frz)
++    clean = ~(sa | fz)
++    print(f"장면 {len(files):,} · agent {nag:,}\n")
++    print(f"{'모집단':28s}{'n':>9s}{'끝점오차 중앙':>14s}{'p99':>10s}{'최대':>10s}")
++    for nm, m in (("전체", np.ones_like(clean)),
++                  ("① 한계 안 + 안 멈춤 (깨끗)", clean),
++                  ("② 종가속 한계 초과", sa),
++                  ("③ 저속 구간 있음", fz)):
++        if m.sum() == 0:
++            continue
++        x = e[m]
++        print(f"{nm:28s}{m.sum():>9,}{np.median(x):>13.4f}m{np.percentile(x,99):>9.4f}m{x.max():>9.3f}m")
++    print(f"\n깨끗한 궤적 비율 {clean.mean()*100:.1f}%  ·  종가속 초과 {sa.mean()*100:.1f}%"
++          f"  ·  저속 포함 {fz.mean()*100:.1f}%")
++    print("\n①이 수치 한계(≈0)가 아니면 적분기나 초기상태가 틀린 것이다.")
++    print("②③은 오차가 나는 게 맞다 — clip 과 동결이 정보를 버리기 때문이다.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/verify_ah2.py b/tools/verify_ah2.py
+new file mode 100644
+index 0000000..b3aacd4
+--- /dev/null
++++ b/tools/verify_ah2.py
+@@ -0,0 +1,161 @@
++"""R1 (a, h) 입력 검증 — 46시간짜리 학습을 걸기 전에 반드시 통과시킬 것.
++
++  python tools/verify_ah2.py --task orig  --n 40    orig 경로가 원본과 bit 단위로 같은가
++  python tools/verify_ah2.py --task ah2   --n 300   (a, h) 가 궤적을 실제로 담고 있는가
++  python tools/verify_ah2.py --task speed --n 200   로더가 느려지지 않았는가
++
++왜 이 셋인가 — R1 − R0 을 '입력 차이'로 읽으려면 ① orig 이 안 변했고 ② ah2 가 정보를
++안 잃었고 ③ 학습 예산이 그대로여야 한다. 하나라도 깨지면 비교가 성립하지 않는다.
++"""
++import argparse
++import os
++import sys
++import time
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++import numpy as np
++import torch
++
++from simpl import ah_feat
++from simpl.av2_dataset import AV2Dataset
++from utils.utils import from_numpy
++
++FEAT = "/data/argoverse2/simpl_features/val/"
++DT, MS_TO_KPH = 0.1, 3.6
++
++
++def batch_trajs(ds, lo, hi):
++    """collate_fn 과 같은 방식으로 trajs 리스트를 만든다 (actor_gather 입력)."""
++    raw = from_numpy([ds[i] for i in range(lo, hi)])
++    return [x["TRAJS"] for x in raw]
++
++
++def ref_orig(trajs):
++    """원본 actor_gather 본문 — git HEAD(b6ed8b8) 에서 그대로 옮긴 것."""
++    act_feats = []
++    for t in trajs:
++        traj_pos = t["TRAJS_POS_OBS"]
++        traj_disp = torch.zeros_like(traj_pos)
++        traj_disp[:, 1:, :] = traj_pos[:, 1:, :] - traj_pos[:, :-1, :]
++        act_feats.append(torch.cat([traj_disp, t["TRAJS_ANG_OBS"], t["TRAJS_VEL_OBS"],
++                                    t["TRAJS_TYPE"], t["PAD_OBS"].unsqueeze(-1)], dim=-1))
++    act_feats = [x.transpose(1, 2) for x in act_feats]
++    return torch.cat(act_feats, 0)[..., 2:]
++
++
++# ────────────────────────────────────────────────── task: orig
++
++def task_orig(ds, n):
++    print(f"[orig] 원본 대조 — 시나리오 {n}판\n")
++    os.environ["SIMPL_ACTOR_FEAT"] = "orig"
++    worst, total = 0.0, 0
++    for lo in range(0, n, 8):
++        trajs = batch_trajs(ds, lo, min(lo + 8, n))
++        got, _ = ds.actor_gather(len(trajs), trajs)
++        exp = ref_orig(trajs)
++        assert got.shape == exp.shape, f"모양 불일치 {got.shape} vs {exp.shape}"
++        worst = max(worst, (got - exp).abs().max().item())
++        total += got.shape[0]
++    print(f"  agent {total}개 · 채널 {got.shape[1]} × step {got.shape[2]}")
++    print(f"  최대 절대차 {worst:.3e}  →  {'bit 단위 동일 ✔' if worst == 0.0 else '다름 ✘'}")
++    return worst == 0.0
++
++
++# ────────────────────────────────────────────────── task: ah2
++
++def task_ah2(ds, n):
++    print(f"[ah2] (a, h) 정보 보존 검증 — 시나리오 {n}판\n")
++    os.environ["SIMPL_ACTOR_FEAT"] = "ah2"
++    rec_f, rec_a, fill_f, fill_a, dv_err, chans = [], [], [], [], [], []
++    n_focal = n_agent = 0
++
++    for lo in range(0, n, 8):
++        trajs = batch_trajs(ds, lo, min(lo + 8, n))
++        for t in trajs:
++            f = ah_feat.ah2_feat(t)                       # [N,48,11]
++            pos = t["TRAJS_POS_OBS"].float()[:, ah_feat.TRIM:]      # [N,48,2]
++            pad = t["PAD_OBS"].float()[:, ah_feat.TRIM:]
++            a, cos_h, sin_h = f[..., 0], f[..., 1], f[..., 2]
++            chans.append(f)
++
++            # ① 누적합이 속력을 돌려주는가 (a 의 정의 그 자체)
++            v_hat = torch.cumsum(a, dim=1) * ah_feat.DV_SCALE / MS_TO_KPH   # [m/s]
++            v_true, _, src = ah_feat.speed_and_heading(
++                t["TRAJS_POS_OBS"].float(),
++                torch.atan2(t["TRAJS_ANG_OBS"].float()[..., 1], t["TRAJS_ANG_OBS"].float()[..., 0]))
++            dv_err.append((v_hat - v_true[:, ah_feat.TRIM:]).abs().max().item())
++
++            # ② (a, h) 만 적분해 48 step 궤적을 복원 — 시작점만 준다
++            step = (v_hat * DT).unsqueeze(-1) * torch.stack([cos_h, sin_h], dim=-1)
++            rec = pos[:, :1] + torch.cat([torch.zeros_like(step[:, :1]),
++                                          torch.cumsum(step[:, :-1], dim=1)], dim=1)
++            err = (rec - pos).norm(dim=-1)                 # [N,48]
++
++            # 움직인 트랙만 — 거의 안 움직인 트랙은 복원 오차가 애초에 0 이라 평균을 흐린다
++            moved = (pos[:, -1] - pos[:, 0]).norm(dim=-1) > 5.0
++            last = err[:, -1]
++            fill = (src[:, ah_feat.TRIM:] == 2).float().mean(dim=1)
++            if moved.any():
++                rec_a.append(last[moved].numpy()); fill_a.append(fill[moved].numpy())
++            if moved[0]:                                   # 0번이 focal
++                rec_f.append(last[0].item()); fill_f.append(fill[0].item())
++            n_agent += pos.shape[0]; n_focal += 1
++
++    def q(x, lab):
++        x = np.concatenate([np.atleast_1d(v) for v in x]) if isinstance(x[0], np.ndarray) else np.array(x)
++        print(f"  {lab:<22} 중앙 {np.median(x):6.3f} · p90 {np.percentile(x,90):6.3f} "
++              f"· p99 {np.percentile(x,99):6.3f} · 최대 {x.max():6.3f}   (n={len(x)})")
++        return x
++
++    print(f"  agent {n_agent}개 / focal {n_focal}개 · V_MIN={ah_feat.V_MIN} · trim={ah_feat.TRIM}\n")
++    print("  ① 누적합 → 속력 복원 (정의상 0 이어야 한다)")
++    print(f"     최대 절대오차 {max(dv_err):.3e} m/s\n")
++    print("  ② (a, h) 적분 → 48 step 끝점 위치오차 [m]  (5 m 이상 움직인 트랙만)")
++    q(rec_f, "focal"); q(rec_a, "전 agent")
++    print("\n  ③ 저속 보조(AV2 yaw)로 메운 step 비율")
++    q(fill_f, "focal"); q(fill_a, "전 agent")
++
++    allf = torch.cat(chans, 0)
++    print("\n  ④ 채널 스케일 (std / |p99|) — 학습 안정성 확인용")
++    names = ["a", "cos h", "sin h"] + [f"type{i}" for i in range(7)] + ["valid"]
++    for i, nm in enumerate(names[:3]):
++        c = allf[..., i].flatten()
++        print(f"     {nm:<6} std {c.std():6.3f} · |p99| {c.abs().quantile(0.99):6.3f} "
++              f"· 최대 {c.abs().max():7.3f}")
++    return True
++
++
++# ────────────────────────────────────────────────── task: speed
++
++def task_speed(ds, n):
++    print(f"[speed] 로더 처리량 — 시나리오 {n}판씩\n")
++    out = {}
++    for m in ("orig", "ah2"):
++        os.environ["SIMPL_ACTOR_FEAT"] = m
++        batch_trajs(ds, 0, 8)                              # 캐시 워밍업
++        t0 = time.perf_counter()
++        for lo in range(0, n, 8):
++            trajs = batch_trajs(ds, lo, min(lo + 8, n))
++            ds.actor_gather(len(trajs), trajs)
++        out[m] = (time.perf_counter() - t0) / n * 1000
++        print(f"  {m:<5} 시나리오당 {out[m]:6.2f} ms  (디스크 읽기 포함)")
++    d = out["ah2"] - out["orig"]
++    print(f"\n  차이 {d:+.2f} ms/시나리오")
++    print(f"  worker 8개 기준 에폭(199,908판) 추가 시간 ≈ {199908 * d / 1000 / 8 / 60:+.1f}분"
++          f"  (R0 1에폭 52분 중 로더 대기는 0.2% 였다)")
++    return True
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--task", required=True, choices=["orig", "ah2", "speed"])
++    ap.add_argument("--n", type=int, default=100)
++    a = ap.parse_args()
++    ds = AV2Dataset(FEAT, mode="val", aug=False, verbose=False)
++    print(f"val {len(ds)}판 로드됨\n")
++    ok = {"orig": task_orig, "ah2": task_ah2, "speed": task_speed}[a.task](ds, a.n)
++    print("\n" + ("통과" if ok else "실패"))
++    sys.exit(0 if ok else 1)
+-- 
+2.43.0
+
