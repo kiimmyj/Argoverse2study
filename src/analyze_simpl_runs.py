@@ -27,6 +27,8 @@ import viz_v4_common as C
 SIMPL = Path("/home/user/av2_simpl")
 OUT = C.ROOT / "viz" / "r1_analysis"
 DOC = C.ROOT / "docs" / "r1_result_analysis.md"
+R2DOC = (C.ROOT / "docs" / "superpowers" / "specs"
+         / "2026-11-25-r2-output-representation-design.md")
 
 # 이름 → (로그, 한 줄 설명). 없는 로그는 조용히 건너뛴다(아직 안 돈 런이 있다).
 RUNS = [
@@ -317,6 +319,76 @@ def settled_self(rows, lo=SETTLED[0], hi=SETTLED[1]):
             "sd": float(np.std(s, ddof=1))}
 
 
+def _cmp(x, ref, eps):
+    """R2 값 하나를 대조군 하나에 댄다. 자(eps)보다 작은 차이는 차이가 아니다."""
+    return "이김" if x < ref - eps else "짐" if x > ref + eps else "구별 안 됨"
+
+
+# (vs R1, vs R0) → 읽기. 기하적으로 불가능한 셋은 그렇게 적는다(R1 이 R0 보다 나쁘므로).
+_READ = {
+    ("이김", "이김"):           "움직임 표현이 좌표를 이겼다",
+    ("이김", "구별 안 됨"):     "R1 열세가 전부 회복 — 원본과 같은 자리 (DKM 기대값)",
+    ("이김", "짐"):             "⚠️ 결론이 갈린다 — 머리기사는 R0",
+    ("구별 안 됨", "짐"):       "짝 맞춤 가설 틀림 — 출력은 원인이 아니다",
+    ("짐", "짐"):               "출력까지 바꾸니 더 나빠졌다",
+    ("구별 안 됨", "구별 안 됨"): "⚠️ 자가 너무 커서 아무것도 구별 못 한다",
+    ("구별 안 됨", "이김"):     "(기하적으로 불가능)",
+    ("짐", "이김"):             "(기하적으로 불가능)",
+    ("짐", "구별 안 됨"):       "(기하적으로 불가능)",
+}
+
+
+def decision_bands(runs, settled, eps=None):
+    """R2 판정 밴드 — 대조군 **둘**과 자 하나로 숫자선에 칼금을 긋는다.
+
+    왜 2×2 격자가 아닌가 — R1 과 R0 가 자의 5.8배 떨어져 있어서 두 판정이 독립이
+    아니다. **R0 를 이기면 R1 은 자동으로 이기고, R1 에 지면 R0 에도 자동으로 진다.**
+    그래서 가능한 조합은 9 개가 아니라 다섯이고, 그 다섯은 숫자선 하나의 연속 구간이
+    된다. 격자로 적으면 못 일어나는 네 칸을 적어 두고 고민하게 된다.
+
+    ⚠️ **경계는 상수가 아니다.** R0/R1 끝점이나 자가 바뀌면 여기서 다시 계산된다
+    (README 규칙 ③). 자가 (R1−R0)/2 를 넘으면 가운데 밴드가 사라지고 "둘 다와
+    구별 안 됨" 이라는 여섯째 상태가 생기는데, 그것도 격자가 아니라 여기서 나온다.
+    """
+    if "R0" not in runs or "R1" not in runs:
+        return None
+    r0 = (runs["R0"].get("final") or {}).get("va_ade")
+    r1 = (runs["R1"].get("final") or {}).get("va_ade")
+    if r0 is None or r1 is None:
+        return None
+    if eps is None:                                    # 자 = 시드만 바꾼 런 간 폭
+        s = (settled or {}).get("R0s43-R0")
+        if not s:
+            return None
+        eps = abs(s["median"])
+    cuts = sorted({round(c, 6) for c in (r0 - eps, r0 + eps, r1 - eps, r1 + eps)})
+    out = []
+    for lo, hi in zip([None] + cuts, cuts + [None]):
+        mid = (lo + hi) / 2 if lo is not None and hi is not None else \
+              (hi - 0.01 if lo is None else lo + 0.01)
+        key = (_cmp(mid, r1, eps), _cmp(mid, r0, eps))
+        if out and out[-1]["key"] == key:              # 같은 판정이면 한 밴드로 합친다
+            out[-1]["hi"] = hi
+            continue
+        out.append({"lo": lo, "hi": hi, "key": key, "read": _READ[key]})
+    for j, b in enumerate(out, 1):
+        b["band"] = "①②③④⑤⑥⑦⑧⑨"[j - 1]
+        b["range"] = (f"< {b['hi']:.3f}" if b["lo"] is None else
+                      f"> {b['lo']:.3f}" if b["hi"] is None else
+                      f"{b['lo']:.3f} ~ {b['hi']:.3f}")
+        b["vs_r1"], b["vs_r0"] = b.pop("key")
+    B = {"r0": r0, "r1": r1, "eps": eps, "cuts": cuts, "bands": out,
+         "mid_alive": r0 + eps < r1 - eps}
+    # 자가검사 — **자로 쓴 런을 이 표에 넣으면 R0 와 "구별 안 됨" 밴드에 떨어져야 한다.**
+    # 떨어지지 않으면 밴드가 아니라 자가 틀린 것이다. 사람 눈으로 확인하지 않고 코드가 본다.
+    s43 = (runs.get("R0-s43", {}).get("final") or {}).get("va_ade")
+    if s43 is not None:
+        hit = next(b for b in out
+                   if (b["lo"] is None or s43 >= b["lo"]) and (b["hi"] is None or s43 <= b["hi"]))
+        B["check"] = {"val": s43, "band": hit["band"], "ok": hit["vs_r0"] == "구별 안 됨"}
+    return B
+
+
 def matched_boundary(upto):
     """비교 구간과 **같은 구간**의 R0 런 내부 p90. 경계는 상수가 아니라 이 규칙이다."""
     j = jitter(read_log(SIMPL / "r0.log"), upto=upto)
@@ -378,6 +450,8 @@ def summarize():
             "disjoint": lo > hi,
             "gap": float(lo - hi) if lo > hi else 0.0,
             "ratio": abs(e["median"]) / abs(n["median"]) if n["median"] else None}
+    # R2 판정 밴드 — 대조군 둘을 미리 등록한다. 값을 보고 대조군을 고르면 사후 해석이다.
+    out["r2_bands"] = decision_bands(runs, out["settled"])
     return out
 
 
@@ -826,19 +900,53 @@ def md_block(S):
     return "\n".join(L)
 
 
-def write_doc(S):
-    if not DOC.exists():
-        print(f"  (문서 없음 — 건너뜀: {DOC})")
+def r2_bands_block(S):
+    """R2 판정 밴드 표. 경계 넷은 R0·R1 끝점과 자에서 계산된다 — 손으로 쓰지 않는다."""
+    B = S.get("r2_bands")
+    if not B:
+        return "_(R0 · R1 · R0-s43 로그가 다 있어야 계산된다)_"
+    L = [f"**대조군 둘** — R0 **{B['r0']:.3f}** (원본 좌표) · R1 **{B['r1']:.3f}** ((a,h) 입력). "
+         f"**자 하나** — 시드만 바꾼 런 간 폭 **{B['eps']:.3f}**.",
+         "",
+         "| 밴드 | R2 가 이 범위면 | vs R1 | vs R0 | 읽기 |",
+         "| --- | --- | --- | --- | --- |"]
+    for b in B["bands"]:
+        L.append(f"| **{b['band']}** | `{b['range']}` | {b['vs_r1']} | {b['vs_r0']} | {b['read']} |")
+    L += ["",
+          f"칼금 넷 = R0 ∓ 자 · R1 ∓ 자 = "
+          + " · ".join(f"**{c:.3f}**" for c in B["cuts"]) + ".",
+          "**칼금 위의 값은 `구별 안 됨` 쪽 밴드에 들어간다** (비교가 `|차이| > 자` 라서).",
+          "" if B["mid_alive"] else
+          "⚠️ 자가 (R1−R0)/2 를 넘어 가운데 밴드가 사라졌다 — 두 대조군을 구별하지 못한다."]
+    if B.get("check"):
+        c = B["check"]
+        L.append(f"**자가검사** — 자로 쓴 런(R0-s43 **{c['val']:.3f}**)을 이 표에 넣으면 "
+                 f"**{c['band']}** 에 떨어진다"
+                 + (" — R0 와 `구별 안 됨`. 밴드가 자와 모순되지 않는다. ✅"
+                    if c["ok"] else
+                    " — ⚠️ **R0 와 구별된다고 나온다. 밴드가 아니라 자가 틀렸다.**"))
+    return "\n".join(x for x in L if x is not None)
+
+
+def fill(path, marker, body):
+    """문서의 <!-- marker:START/END --> 구간을 갈아 끼운다."""
+    if not path.exists():
+        print(f"  (문서 없음 — 건너뜀: {path})")
         return
-    txt = DOC.read_text()
-    a, b = "<!-- NUMBERS:START -->", "<!-- NUMBERS:END -->"
+    txt = path.read_text()
+    a, b = f"<!-- {marker}:START -->", f"<!-- {marker}:END -->"
     if a not in txt or b not in txt:
-        print("  (표식 없음 — 문서 갱신 건너뜀)")
+        print(f"  (표식 {marker} 없음 — {path.name} 갱신 건너뜀)")
         return
     head, rest = txt.split(a, 1)
     _, tail = rest.split(b, 1)
-    DOC.write_text(f"{head}{a}\n\n{md_block(S)}\n\n{b}{tail}")
-    print(f"  문서 갱신 → {DOC}")
+    path.write_text(f"{head}{a}\n\n{body}\n\n{b}{tail}")
+    print(f"  문서 갱신 → {path}")
+
+
+def write_doc(S):
+    fill(DOC, "NUMBERS", md_block(S))
+    fill(R2DOC, "R2BANDS", r2_bands_block(S))
 
 
 if __name__ == "__main__":
@@ -852,6 +960,12 @@ if __name__ == "__main__":
         f = r["final"] or {}
         print(f"  {name:7s} 에폭 {r['n_epoch']:2d} · 검증 {r['n_val']:2d} · "
               f"최종 {f.get('va_ade')} · 1에폭 {r['timing']['tr_mean']:.2f}분")
+    B = S.get("r2_bands")
+    if B:
+        print(f"  R2 밴드 (자 {B['eps']:.3f}) · 칼금 "
+              + " ".join(f"{c:.3f}" for c in B["cuts"]))
+        for b in B["bands"]:
+            print(f"    {b['band']} {b['range']:>15s}  R1 {b['vs_r1']:9s} R0 {b['vs_r0']:9s} {b['read']}")
     for k, p in S["pairs"].items():
         print(f"  {k}: 공통 {p['n']}개 · 중앙 {p['median']:+.4f} · 상대 우세 {p['b_better']}/{p['n']}")
     plt = C.setup_mpl()
