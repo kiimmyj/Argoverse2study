@@ -1057,6 +1057,68 @@ def fig_spec(plt, S):
     fig.tight_layout()
     return C.savefig(fig, OUT / "m_spec.png")
 
+
+def fig_lang(plt):
+    """미팅용 — 원본과 (a,h) 규격을 나란히. 바뀌는 자리가 양끝 둘뿐임을 보인다.
+
+    데이터를 안 쓴다(구조 그림). 그래도 생성기 안에 두는 이유는 손으로 그려 붙이면
+    규격이 바뀔 때 그림만 낡기 때문이다.
+    """
+    from matplotlib.patches import FancyBboxPatch
+    fig, ax = plt.subplots(figsize=(11.8, 5.4))
+    # ⚠️ 아래쪽 상자가 y=0.005 에서 시작한다 — ylim 을 0 으로 두면 tight_layout 이 잘라낸다.
+    ax.set_xlim(0, 1); ax.set_ylim(-0.035, 1.0); ax.axis("off")
+    ax.set_title("좌표로 적던 것을 움직임으로 — 입력도 출력도 같은 언어가 된다",
+                 fontsize=11.4, loc="left", color=C.INK)
+
+    GREY, ORG, BLU = "#f1f0ea", "#fde3d6", "#d9e7f9"
+
+    def box(x, y, w, h, txt, fc, ec, bold=False, fs=9.4):
+        ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.011",
+                                    fc=fc, ec=ec, lw=1.5, zorder=2))
+        ax.text(x + w / 2, y + h / 2, txt, ha="center", va="center", fontsize=fs,
+                color=C.INK, fontweight="bold" if bold else "normal", linespacing=1.45, zorder=3)
+
+    def arrow(x, y0, y1):
+        ax.annotate("", xy=(x, y1), xytext=(x, y0),
+                    arrowprops=dict(arrowstyle="-|>", color=C.INK2, lw=1.5))
+
+    W, H = 0.40, 0.125
+    for cx, head, col in ((0.05, "원본 SIMPL", C.MUTED), (0.55, "(a, h) 규격", C.C_ORANGE)):
+        ax.text(cx, 0.945, head, fontsize=10.6, color=col, fontweight="bold")
+        ax.plot([cx, cx + W], [0.925, 0.925], color=col, lw=2.0)
+
+    # 왼쪽 — 원본
+    box(0.05, 0.765, W, H, "과거 5초\nΔx, Δy  +  차체각  +  속도벡터   (6칸)", GREY, C.AXIS)
+    arrow(0.25, 0.760, 0.705)
+    box(0.05, 0.575, W, H, "모델 (인코더 · 융합 · 디코더)", GREY, C.AXIS)
+    arrow(0.25, 0.570, 0.515)
+    box(0.05, 0.385, W, H, "미래 6초\nx, y   ← 좌표를 직접 낸다", GREY, C.AXIS)
+
+    # 오른쪽 — 규격
+    box(0.55, 0.765, W, H, "과거 5초\na,  cos h,  sin h   (3칸)", ORG, C.C_ORANGE, True)
+    arrow(0.75, 0.760, 0.705)
+    box(0.55, 0.575, W, H, "모델 — 그대로 둔다", GREY, C.AXIS)
+    arrow(0.75, 0.570, 0.515)
+    box(0.55, 0.385, W, H, "미래 6초\na,  Δh   ← 움직임을 낸다", ORG, C.C_ORANGE, True)
+    arrow(0.75, 0.380, 0.325)
+    box(0.55, 0.195, W, H, "f  — 고정 적분기 · 학습 파라미터 0", BLU, C.C_BLUE, True)
+    arrow(0.75, 0.190, 0.135)
+    box(0.55, 0.005, W, H, "미래 6초\nx, y   ← 수식이 만든다", GREY, C.AXIS)
+
+    ax.text(0.05, 0.28, "바뀌는 자리는 **양끝 둘**", fontsize=10.4, color=C.C_ORANGE,
+            fontweight="bold").set_text("바뀌는 자리는 양끝 둘뿐이다")
+    ax.text(0.05, 0.215,
+            "모델 속은 손대지 않는다. 그래서\n인코더 → 모드별 특징 → 좌표 회귀 구조면\n"
+            "어느 모델에도 같은 방식으로 붙는다.",
+            fontsize=9.0, color=C.INK2, va="top", linespacing=1.65)
+    ax.text(0.05, 0.055, "a   속도를 얼마나 올렸나 / 내렸나\n"
+                         "h   어느 쪽을 향해 가고 있나\nΔh  방향을 얼마나 틀었나",
+            fontsize=9.0, color=C.INK, va="top", linespacing=1.65,
+            bbox=dict(fc=C.SURF, ec=C.GRID, lw=0.9, pad=5.0))
+    fig.tight_layout()
+    return C.savefig(fig, OUT / "m_lang.png")
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-doc", action="store_true")
@@ -1081,6 +1143,7 @@ if __name__ == "__main__":
     fig_effect_vs_noise(plt, S)
     fig_meeting(plt, S)
     print(f"  규격 그림 → {fig_spec(plt, S)}")
+    print(f"  언어 그림 → {fig_lang(plt)}")
     if not a.no_doc:
         write_doc(S)
     print(f"  숫자 → {OUT / 'numbers.json'}")
