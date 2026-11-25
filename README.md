@@ -42,8 +42,7 @@ Argoverse 2 Motion Forecasting 위에서 **하나의 질문**을 재는 연구 �
 | --- | --- |
 | [`docs/idea_note_ah.md`](docs/idea_note_ah.md) | **여기서 시작한다.** 전제·설계·사전 등록, 그리고 측정으로 뒤집힌 다섯 가지 |
 | [`docs/r1_result_analysis.md`](docs/r1_result_analysis.md) | R1 판정 전문 — 정착 구간 띠, 입력 품질 분리 측정, 오독한 기록까지 |
-| [`docs/action_input_repr.md`](docs/action_input_repr.md) | **다른 모델에도 쓰는 규격 ①** — 입력을 (a, h) 로 |
-| [`docs/action_output_head.md`](docs/action_output_head.md) | **다른 모델에도 쓰는 규격 ②** — 액션 출력 헤드 + 고정 적분기 |
+| [`docs/action_spec.md`](docs/action_spec.md) | **다른 모델에도 쓰는 규격** — 입력 (a, h) · 출력 (a, Δh) + 고정 적분기 |
 | [`docs/v4_restart_simpl.md`](docs/v4_restart_simpl.md) | 자체 모델(v4)을 접고 SIMPL 로 간 이유 |
 | [`docs/simpl_preprocessing.md`](docs/simpl_preprocessing.md) | SIMPL 이 무엇을 미리 굽는가 |
 

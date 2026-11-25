@@ -134,7 +134,7 @@ def fig(plt, S):
     return C.savefig(fig, OUT / "k1_noise_vs_physics.png")
 
 
-DOC = C.ROOT / "docs" / "action_output_head.md"
+DOC = C.ROOT / "docs" / "action_spec.md"
 BANDS = ["0.5~2", "2~5", "5~10", "10~20", "≥20"]
 
 

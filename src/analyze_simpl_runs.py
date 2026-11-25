@@ -951,7 +951,7 @@ def write_doc(S):
 
 # ────────────────────────────────────────────────────────────── 미팅용 — 규격
 
-# 모델별로 갈아 끼우는 자리. docs/action_output_head.md §4 와 같은 내용이다.
+# 모델별로 갈아 끼우는 자리. docs/action_spec.md §10 과 같은 내용이다.
 SPEC_MODELS = [("SIMPL", "MLPDecoder 의 param_out 분기"),
                ("Forecast-MAE", "디코더 좌표 회귀 MLP"),
                ("DeMo", "모드별 궤적 회귀 머리"),

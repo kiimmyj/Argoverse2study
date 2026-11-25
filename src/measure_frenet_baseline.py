@@ -154,7 +154,7 @@ def fig(plt, S, rows):
     return C.savefig(fig, OUT / "f1_baseline_rules.png")
 
 
-DOC = C.ROOT / "docs" / "action_output_head.md"
+DOC = C.ROOT / "docs" / "action_spec.md"
 
 
 def md_block(S, n_scene):

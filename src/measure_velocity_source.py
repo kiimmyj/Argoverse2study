@@ -26,7 +26,7 @@ import pandas as pd
 import viz_v4_common as C
 
 OUT = C.ROOT / "viz" / "velocity_source"
-DOC = C.ROOT / "docs" / "action_input_repr.md"
+DOC = C.ROOT / "docs" / "action_spec.md"
 DT = 0.1
 QS = [50, 90, 99]
 
