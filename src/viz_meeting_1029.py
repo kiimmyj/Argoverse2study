@@ -10,6 +10,7 @@
   m4_rate.png        5 Hz 질문 — 길이는 답이 있고 레이트는 비어 있다
   m5_plan.png        SIMPL 파이프라인 검증과 실험 단계·비용
   m6_rollout.png     예측 방식 — (a, Δθ) 적분기와 다른 모델의 출력 형태
+  m7_frenet_baseline.png  R2 결정 — Frenet 기준선을 고정할지 매 step 재투영할지
 
   python viz_meeting_1029.py            # 다섯 장 전부
   python viz_meeting_1029.py --only m3  # 한 장만
@@ -476,7 +477,7 @@ def main():
     a = ap.parse_args()
     plt = C.setup_mpl()
     OUT.mkdir(parents=True, exist_ok=True)
-    todo = [a.only] if a.only else ["m1", "m2", "m3", "m4", "m5", "m6"]
+    todo = [a.only] if a.only else ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]
     for name in todo:
         fn = globals()[name]
         p = fn(plt, a.sid) if name == "m3" else fn(plt)
@@ -562,6 +563,100 @@ def m6(plt):
                  x=0.012, ha="left", fontsize=13.5, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     return C.savefig(fig, OUT / "m6_rollout.png")
+
+
+
+# ───────────────── m7 — Frenet 기준선: 고정이냐 매 step 재투영이냐 (R2 설계 결정)
+
+M7_SID = "07671046-47b1-4ec2-b365-b36982e879a4"      # m3 와 같은 좌회전 장면 (93° 회전)
+
+
+def m7(plt, sid=M7_SID):
+    """R2 의 미해결 하나를 실제 장면에서 눈으로 가른다.
+
+    세 패널. ① 지도 위에 기준선 두 규칙을 겹친다 ② θ = h − k 가 두 규칙에서 어떻게 다른가
+    ③ **Δθ** — 여기가 핵심이다. 기준선이 상수면 Δk = 0 이라
+
+        Δθ_t = (h_t − k_t) − (h_{t-1} − k_{t-1}) = Δh_t − Δk_t  →  Δh_t
+
+    즉 **고정 기준선은 Δθ 출력에서 통째로 상쇄된다.** 차선이 식에서 사라진다.
+    "도로를 따라가게 한다" 가 목적이면 이 패널 하나로 선택지가 지워진다.
+    """
+    from av2.map.map_api import ArgoverseStaticMap
+    import matplotlib.gridspec as gs
+
+    sids = json.loads((CACHE / "scenario_id.json").read_text())
+    i = sids.index(sid)
+    origin = np.asarray(np.load(CACHE / "origin.npy", mmap_mode="r")[i], np.float64)
+    theta = float(np.load(CACHE / "theta.npy", mmap_mode="r")[i])
+    ts, pos, head, _ = _load_focal(sid, origin, theta)
+    amap = ArgoverseStaticMap.from_json(C.VAL_DIR / sid / f"log_map_archive_{sid}.json")
+    pts, tans = _centerline_cloud(amap, origin, theta)
+    k_mov, kidx = _nearest_lane_angle(pos, head, pts, tans)
+    k_fix = k_mov[C.OBS - 1]                              # t=49 의 최근접 차로 접선 하나로 고정
+    th_mov, th_fix = C.wrap(head - k_mov), C.wrap(head - k_fix)
+    dth_mov = np.rad2deg(C.wrap(np.diff(th_mov)))
+    dth_fix = np.rad2deg(C.wrap(np.diff(th_fix)))
+    t = (ts - C.OBS + 1) * 0.1
+    fut = ts >= C.OBS
+
+    fig = plt.figure(figsize=(13.4, 5.6))
+    g = gs.GridSpec(3, 2, width_ratios=[1.15, 1.25], figure=fig, hspace=0.42, wspace=0.16)
+
+    # ── ① 지도
+    ax = fig.add_subplot(g[:, 0])
+    scene = C.build_scene(sid, origin, theta)
+    cx, cy = pos[:, 0].mean(), pos[:, 1].mean()
+    half = max(np.ptp(pos[:, 0]), np.ptp(pos[:, 1])) / 2 + 12
+    ar = 1.22
+    xlim, ylim = (cx - half / ar, cx + half / ar), (cy - half, cy + half)
+    C.draw_scene_light(ax, scene, xlim, ylim)
+    ax.plot(pos[~fut, 0], pos[~fut, 1], "-", color=C.C_PAST, lw=2.6, zorder=6)
+    ax.plot(pos[fut, 0], pos[fut, 1], "-", color=C.C_GT, lw=2.8, zorder=7, label="정답 6 s")
+    for j in range(C.OBS - 1, len(pos), 15):              # 미래 구간에만 두 기준선을 겹친다
+        L = 7.0
+        for ang, col in ((k_fix, C.C_RED), (k_mov[j], C.C_AQUA)):
+            ax.annotate("", xy=(pos[j, 0] + L * np.cos(ang), pos[j, 1] + L * np.sin(ang)),
+                        xytext=(pos[j, 0], pos[j, 1]),
+                        arrowprops=dict(arrowstyle="-|>", color=col, lw=1.7), zorder=9)
+    ax.plot([], [], "-", color=C.C_RED, lw=1.7, label="고정 — t=49 차로 하나")
+    ax.plot([], [], "-", color=C.C_AQUA, lw=1.7, label="재투영 — 매 step 최근접 차로")
+    C.draw_box(ax, pos[C.OBS - 1, 0], pos[C.OBS - 1, 1], head[C.OBS - 1], C.C_BLUE, zorder=10)
+    C.scale_bar(ax, xlim, ylim)
+    ax.set_xlim(*xlim); ax.set_ylim(*ylim); ax.set_aspect("equal")
+    ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+    ax.set_title("① 차는 93° 도는데 고정 기준선(빨강)은 끝까지 안 돈다", loc="left", fontsize=10)
+    ax.legend(loc="lower right", fontsize=8.2, facecolor="white", framealpha=0.88)
+
+    # ── ② θ
+    ax2 = fig.add_subplot(g[0:2, 1])
+    ax2.axvspan(t[0], 0, color=C.GRID, alpha=0.45, lw=0)
+    ax2.plot(t, np.rad2deg(th_fix), color=C.C_RED, lw=1.9, label="θ · 고정 기준선")
+    ax2.plot(t, np.rad2deg(th_mov), color=C.C_AQUA, lw=1.9, label="θ · 매 step 재투영")
+    ax2.axhline(0, color=C.INK, lw=0.9)
+    ax2.set_ylabel("θ = h − k  [°]")
+    mv = np.rad2deg(np.abs(th_mov[fut]))        # 판정은 미래 구간에서 — 과거는 둘이 거의 같다
+    ax2.set_title(f"② 모델이 내야 하는 값 — 고정은 {np.rad2deg(th_fix[-1]):.0f}° 까지 커지고, "
+                  f"재투영은 |θ| 중앙 {np.median(mv):.0f}°·평균 {mv.mean():.0f}° 로 접힌다",
+                  loc="left", fontsize=9.6)
+    ax2.legend(loc="upper left", fontsize=8.2, framealpha=0.9)
+    ax2.set_xticklabels([])
+
+    # ── ③ Δθ — 상쇄가 보이는 자리
+    ax3 = fig.add_subplot(g[2, 1], sharex=ax2)
+    ax3.axvspan(t[0], 0, color=C.GRID, alpha=0.45, lw=0)
+    ax3.plot(t[1:], dth_fix, color=C.C_RED, lw=1.9)
+    ax3.plot(t[1:], dth_mov, color=C.C_AQUA, lw=1.5, alpha=0.95)
+    ax3.axhline(0, color=C.INK, lw=0.9)
+    ax3.set_ylabel("Δθ  [°/step]"); ax3.set_xlabel("시간 [s]   (0 = 관측 끝)")
+    ax3.set_title(f"③ 증분으로 내면 고정 기준선은 상쇄된다 — 빨강은 Δh 그 자체 · "
+                  f"재투영은 최대 {np.abs(dth_mov).max():.0f}°/step 튄다", loc="left", fontsize=9.6)
+    j = int(np.argmax(np.abs(dth_mov)))
+    ax3.annotate(f"차로가 바뀌는 순간 {dth_mov[j]:+.0f}°", xy=(t[1:][j], dth_mov[j]),
+                 xytext=(0.62, 0.12), textcoords="axes fraction", fontsize=8.2, color=C.C_AQUA,
+                 arrowprops=dict(arrowstyle="->", color=C.C_AQUA, lw=0.9))
+    fig.tight_layout()
+    return C.savefig(fig, OUT / "m7_frenet_baseline.png")
 
 if __name__ == "__main__":
     main()
