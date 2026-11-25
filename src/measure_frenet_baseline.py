@@ -154,11 +154,58 @@ def fig(plt, S, rows):
     return C.savefig(fig, OUT / "f1_baseline_rules.png")
 
 
+DOC = C.ROOT / "docs" / "action_output_head.md"
+
+
+def md_block(S, n_scene):
+    """규격 문서의 표. **손으로 적으면 낡는다** — 실제로 두 번 낡았다(2026-11-26 발견).
+    회전의 |θ| 고정값이 300판 예비 측정의 22° 로 남아 있었는데 전수는 35.7° 다."""
+    mov = sum(e["n"] for k, e in S.items() if k != "전체 (움직인 판)" and k != "거의 안 움직임")
+    L = [f"AV2 val {n_scene:,}판 전수 (`src/measure_frenet_baseline.py`, 미래 60 step, 중앙값):", "",
+         "| | n | **신호의 거칠기** 고정 | 재투영 | \\|θ\\| 고정 | 재투영 | **한 step 기준선 점프** |",
+         "| --- | --- | --- | --- | --- | --- | --- |"]
+    for k in ("회전", "직진"):
+        e = S[k]
+        # ⚠️ 굵게는 **데이터가 정한다**. 열을 고정해 굵게 하면 직진처럼 고정이 이기는
+        #    줄에서 거짓말이 된다(2026-11-26 발견 — 재투영 1.5° 가 굵고 고정 1.1° 가 안 굵었다).
+        def duo(x, y, f="{:.2f}°"):
+            a, b = f.format(x), f.format(y)
+            return (f"**{a}**", b) if x <= y else (a, f"**{b}**")
+        r1, r2 = duo(e["fix.rough"], e["mov.rough"])
+        t1, t2 = duo(e["fix.th_mean"], e["mov.th_mean"], "{:.1f}°")
+        L.append(f"| {k} | {e['n']:,} | {r1} | {r2} | {t1} | {t2} | **{e['dk_max']:.1f}°** |")
+    tn = S["회전"]["n"] + S["직진"]["n"] + S.get("중간", {"n": 0})["n"]
+    L += ["", f"회전은 움직인 판의 **{S['회전']['n'] / tn * 100:.0f}%**, "
+              f"직진이 **{S['직진']['n'] / tn * 100:.0f}%** 다."]
+    return "\n".join(L)
+
+
+def fill_doc(S, n_scene):
+    if not DOC.exists():
+        return
+    txt = DOC.read_text()
+    a, b = "<!-- FRENET:START -->", "<!-- FRENET:END -->"
+    if a not in txt or b not in txt:
+        print("  (표식 FRENET 없음 — 문서 갱신 건너뜀)")
+        return
+    head, rest = txt.split(a, 1)
+    _, tail = rest.split(b, 1)
+    DOC.write_text(f"{head}{a}\n\n{md_block(S, n_scene)}\n\n{b}{tail}")
+    print(f"  문서 갱신 → {DOC}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=0, help="앞 N 장면만")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--from-json", action="store_true",
+                    help="다시 재지 않고 저장된 numbers.json 으로 문서만 갱신")
     a = ap.parse_args()
+
+    if a.from_json:
+        d = json.loads((OUT / "numbers.json").read_text())
+        fill_doc(d["summary"], d["n_scene"])
+        return
 
     sids = json.loads((M.CACHE / "scenario_id.json").read_text())
     n = a.n or len(sids)
@@ -195,6 +242,7 @@ def main():
          "note": "미래 60 step · h 는 위치차분 · k 는 진행방향 게이트 90° 최근접 차로"},
         ensure_ascii=False, indent=1))
     p = fig(C.setup_mpl(), S, rows)
+    fill_doc(S, len(rows))
     print(f"\n그림 → {p}\n숫자 → {OUT / 'numbers.json'}")
 
 
