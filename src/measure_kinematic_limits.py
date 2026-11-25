@@ -42,7 +42,8 @@ SBINS = [("≥0.5", 0.5, 1e9), ("0.5~2", 0.5, 2), ("2~5", 2, 5),
 GRID = [("a_lon", 120.0, 2400), ("a_lat", 120.0, 2400), ("dh_deg", 180.0, 1800)]
 QS = [50, 90, 99, 99.9]
 # 후보 상한 — 타이어 마찰에서 온다. μ≈0.8 승용차 건조 노면 → μg ≈ 7.8 m/s².
-CAND = {"a_lon": [4.0, 6.0, 8.0, 10.0], "a_lat": [4.0, 6.0, 8.0, 10.0]}
+# 횡가속 6.87 = bahari2022vehicle 식 6 의 μ=0.7 · 종가속 8.0 = cui2019dkm 각주 클리핑 상수
+CAND = {"a_lon": [4.0, 6.0, 8.0, 10.0], "a_lat": [4.0, 6.0, 6.87, 8.0, 10.0]}
 
 
 def _hist(x, top, nb):
@@ -133,6 +134,46 @@ def fig(plt, S):
     return C.savefig(fig, OUT / "k1_noise_vs_physics.png")
 
 
+DOC = C.ROOT / "docs" / "action_output_head.md"
+BANDS = ["0.5~2", "2~5", "5~10", "10~20", "≥20"]
+
+
+def md_block(S, bind, n_scene):
+    """규격 문서의 표 둘. 손으로 적으면 상한을 바꿀 때 한쪽이 낡는다."""
+    V, St = S["차량"], S["정적"]
+    L = [f"AV2 **train** {n_scene:,}판 (`src/measure_kinematic_limits.py`). "
+         f"⚠️ val 로 상한을 정하면 평가에 쓸 데이터로 설정값을 맞추는 셈이다.", "",
+         "| 직전 step 속도 | 차량 \\|Δh\\| p99 | **정적 물체** \\|Δh\\| p99 | 차량 \\|횡가속\\| p99 |",
+         "| --- | --- | --- | --- |"]
+    for b in BANDS:
+        hi = V[b]["dh_deg"]["p99"] >= 90          # 잡음과 구별 안 되는 구간
+        L.append(f"| {b} m/s | {'' if hi else '**'}{V[b]['dh_deg']['p99']:.1f}°{'' if hi else '**'} "
+                 f"| **{St[b]['dh_deg']['p99']:.1f}°** | {V[b]['a_lat']['p99']:.1f} |")
+    L += ["", "**움직이면 안 되는 정적 물체가 모든 구간에서 \\|Δh\\| p99 ≈ 179°** — 정의상 전부 잡음이다. "
+              "차량도 **5 m/s 아래에서는 구별이 안 된다.**", "",
+          "| 차량 step 중 상한에 걸리는 비율 | " + " | ".join(f"{c:g}" for c in CAND["a_lat"]) + " |",
+          "| --- | " + " | ".join("---" for _ in CAND["a_lat"]) + " |"]
+    for b in ("5~10", "10~20", "≥20"):
+        L.append(f"| 횡가속 · {b} m/s | " +
+                 " | ".join(("**" if c == 6.87 else "") + f"{bind['a_lat'][b][str(c)]:.2f}%" +
+                            ("**" if c == 6.87 else "") for c in CAND["a_lat"]) + " |")
+    return "\n".join(L)
+
+
+def fill_doc(S, bind, n_scene):
+    if not DOC.exists():
+        return
+    txt = DOC.read_text()
+    a, b = "<!-- KINLIM:START -->", "<!-- KINLIM:END -->"
+    if a not in txt or b not in txt:
+        print("  (표식 KINLIM 없음 — 건너뜀)")
+        return
+    head, rest = txt.split(a, 1)
+    _, tail = rest.split(b, 1)
+    DOC.write_text(f"{head}{a}\n\n{md_block(S, bind, n_scene)}\n\n{b}{tail}")
+    print(f"  문서 갱신 → {DOC}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=20000)
@@ -206,6 +247,7 @@ def main():
         {"n_scene": len(files), "source": "train", "v_min": V_MIN, "dt": DT,
          "note": "ah_feat.speed_and_heading 정의. 결측 제외. 히스토그램 분위수.",
          "by_type": S, "binding_pct_vehicle": bind}, ensure_ascii=False, indent=1))
+    fill_doc(S, bind, len(files))
     print(f"그림 → {fig(C.setup_mpl(), S)}")
     print(f"숫자 → {OUT / 'numbers.json'}")
 

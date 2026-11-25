@@ -1,0 +1,46 @@
+From 836204774551eb5eeda3bb0478e4366ab918c519 Mon Sep 17 00:00:00 2001
+From: kiimmyj <zxzxcv533@gmail.com>
+Date: Thu, 26 Nov 2026 03:28:11 +0900
+Subject: [PATCH] =?UTF-8?q?=ED=9A=A1=EA=B0=80=EC=86=8D=20=EC=83=81?=
+ =?UTF-8?q?=ED=95=9C=208.0=20=E2=86=92=206.87=20=E2=80=94=20=EB=85=BC?=
+ =?UTF-8?q?=EB=AC=B8=20=EA=B0=92=EC=97=90=20=EB=A7=9E=EC=B6=98=EB=8B=A4?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+8.0 은 출처 없는 μ≈0.8 에서 나온 값이었다. 같은 식을 쓴 논문이 있다 —
+bahari2022vehicle(CVPR 2022) 식 6 의 v²/R ≤ μg 는 μ=0.7, 즉 6.87 이다.
+
+종가속 8.0 과 V_FLOOR 1.0 은 그대로 둔다. 각각 cui2019dkm 각주의 클리핑
+상수와 phanminh2020covernet 의 max(v,1) 과 정확히 같았다.
+
+오라클을 다시 쟀다. 설계 바닥이 0.0131 → 0.0135 m 로 거의 안 움직인다.
+상한을 좁혀도 적분기가 도달할 수 있는 범위는 그대로다.
+
+대가는 고속에서 더 잘린다는 것이다. 10~20 m/s 에서 한 step 한계가 3.06°
+→ 2.62° 가 되는데 실측 p99 는 3.25° 다. 8.0 에서도 이미 빡빡했다.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ simpl/action_head.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/simpl/action_head.py b/simpl/action_head.py
+index 53c31f1..b3078fb 100644
+--- a/simpl/action_head.py
++++ b/simpl/action_head.py
+@@ -20,8 +20,9 @@ import torch
+ 
+ DT = 0.1
+ A_SCALE = 1.2        # a = Δv[m/s] × 1.2 — ah_feat 의 (km/h ÷ 3.0) 과 같은 눈금
+-A_MAX = 8.0          # [m/s²] 종가속 한계 — 타이어 마찰 μg ≈ 7.8 에서 (정답 꼬리가 아니다)
+-A_LAT_MAX = 8.0      # [m/s²] 횡가속 한계
++A_MAX = 8.0          # [m/s²] 종가속 — Cui et al. ICRA 2019 (DKM) 각주 1·5 의 클리핑 상수 그대로
++A_LAT_MAX = 6.87     # [m/s²] 횡가속 — Bahari et al. CVPR 2022 식 6 `v²/R ≤ μg`, μ=0.7 (2026-11-26 변경)
++#                      8.0 이었다. 출처 없는 μ≈0.8 이었고, 논문 값에 맞췄다.
+ V_FLOOR = 1.0        # [m/s] D_MAX 가 v→0 에서 발산하는 것을 막는다 (CoverNet 과 같은 이유)
+ V_MIN = 0.5          # [m/s] 이 아래는 방향이 정의되지 않는다 — 동결 (ah_feat 입력 게이트와 같은 값)
+ DEG = math.pi / 180.0
+-- 
+2.43.0
+
