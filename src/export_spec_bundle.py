@@ -77,7 +77,17 @@ def main():
             z.write(src, f"{stem}/images/{name}")
     print(f"  묶음 → {zp}  ({zp.stat().st_size/1024:.0f} KB)")
 
-    # ── ② 단일 HTML — 그림을 base64 로 문서 안에 박는다
+    # ── ② 펼친 md — 그림을 같은 폴더에 두고 경로를 **파일 이름만**으로
+    #    사용자가 md 와 png 를 한 폴더에 내려받으면 그대로 보인다. zip 과 달리 풀 필요가 없다.
+    flat = out / "md"
+    flat.mkdir(exist_ok=True)
+    (flat / f"{stem}.md").write_text(
+        IMG.sub(lambda m: f"![{m.group(1)}]({Path(m.group(2)).name})", text))
+    for src, name in imgs:
+        shutil.copy2(src, flat / name)
+    print(f"  펼친 md → {flat}/  ({stem}.md + 그림 {len(imgs)}장, 경로는 파일 이름만)")
+
+    # ── ③ 단일 HTML — 그림을 base64 로 문서 안에 박는다
     import markdown
     def embed(m):
         src = (doc.parent / m.group(2)).resolve()
