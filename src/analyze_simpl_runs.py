@@ -339,7 +339,7 @@ _READ = {
 
 
 def decision_bands(runs, settled, eps=None):
-    """R2 판정 밴드 — 대조군 **둘**과 자 하나로 숫자선에 칼금을 긋는다.
+    """R2 판정 밴드 — 대조군 **둘**과 시드 간 분산 하나로 수직선에 경계를 긋는다.
 
     왜 2×2 격자가 아닌가 — R1 과 R0 가 자의 5.8배 떨어져 있어서 두 판정이 독립이
     아니다. **R0 를 이기면 R1 은 자동으로 이기고, R1 에 지면 R0 에도 자동으로 진다.**
@@ -913,9 +913,9 @@ def r2_bands_block(S):
     for b in B["bands"]:
         L.append(f"| **{b['band']}** | `{b['range']}` | {b['vs_r1']} | {b['vs_r0']} | {b['read']} |")
     L += ["",
-          f"칼금 넷 = R0 ∓ 자 · R1 ∓ 자 = "
+          f"경계 넷 = R0 ∓ 시드분산 · R1 ∓ 시드분산 = "
           + " · ".join(f"**{c:.3f}**" for c in B["cuts"]) + ".",
-          "**칼금 위의 값은 `구별 안 됨` 쪽 밴드에 들어간다** (비교가 `|차이| > 자` 라서).",
+          "**경계 위의 값은 `구별 안 됨` 구간에 들어간다** (비교가 `|차이| > 시드분산` 이라서).",
           "" if B["mid_alive"] else
           "⚠️ 자가 (R1−R0)/2 를 넘어 가운데 밴드가 사라졌다 — 두 대조군을 구별하지 못한다."]
     if B.get("check"):
@@ -1047,11 +1047,11 @@ def fig_spec(plt, S):
     if B.get("check"):
         c = B["check"]
         axR.plot([0.575], [c["val"]], marker="D", ms=6.5, color=C.C_VIOLET, zorder=8)
-        axR.text(0.555, c["val"], f"시드만 바꾼 런 {c['val']:.3f} → {c['band']}  (칼금 위)", fontsize=8.4,
+        axR.text(0.555, c["val"], f"시드만 바꾼 런 {c['val']:.3f} → {c['band']}  (경계 위)", fontsize=8.4,
                  color=C.C_VIOLET, ha="right", va="center", zorder=8)
     # ⚠️ 왼쪽 위에 두면 밴드 ① 의 범위 글씨를 덮는다(2026-11-26 확인). 비어 있는 ⑤ 쪽으로.
     axR.text(0.98, 0.03, f"자 = 시드만 바꾼 런 간 폭 {B['eps']:.3f}\n"
-                         f"칼금 = R0 ∓ 자 · R1 ∓ 자 (계산된다)",
+                         f"경계 = R0 ∓ 시드분산 · R1 ∓ 시드분산 (계산된다)",
              transform=axR.transAxes, fontsize=8.6, color=C.INK2, va="bottom", ha="right",
              bbox=dict(fc=C.SURF, ec=C.GRID, lw=0.9, pad=4.0), zorder=9)
     fig.tight_layout()
@@ -1132,7 +1132,7 @@ if __name__ == "__main__":
               f"최종 {f.get('va_ade')} · 1에폭 {r['timing']['tr_mean']:.2f}분")
     B = S.get("r2_bands")
     if B:
-        print(f"  R2 밴드 (자 {B['eps']:.3f}) · 칼금 "
+        print(f"  R2 구간 (시드분산 {B['eps']:.3f}) · 경계 "
               + " ".join(f"{c:.3f}" for c in B["cuts"]))
         for b in B["bands"]:
             print(f"    {b['band']} {b['range']:>15s}  R1 {b['vs_r1']:9s} R0 {b['vs_r0']:9s} {b['read']}")
